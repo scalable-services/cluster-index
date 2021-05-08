@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+//#options
+option java_multiple_files = true;
+option java_package = "cluster.grpc";
+option java_outer_classname = "GreeterService";
+
+package cluster.grpc;
+
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloResponse {
+  string msg = 1;
+}
