@@ -294,7 +294,7 @@ class MainSpec extends AnyFlatSpec with Repeatable {
         }
       }
 
-      def splitLeaf(left: Leaf[K, V], data: Seq[Tuple2[K, V]], check: Boolean): (Boolean, Int) = {
+      def splitLeaf(left: Leaf[K, V], data: Seq[Tuple2[K, V]]): (Boolean, Int) = {
         val right = left.split()
 
         var count = 0
@@ -328,13 +328,13 @@ class MainSpec extends AnyFlatSpec with Repeatable {
         handleParent(left, right) -> count
       }
 
-      def insertLeaf(left: Leaf[K, V], data: Seq[Tuple2[K, V]], check: Boolean): (Boolean, Int) = {
+      def insertLeaf(left: Leaf[K, V], data: Seq[Tuple2[K, V]]): (Boolean, Int) = {
         if(left.isFull()){
 
           /*val right = left.split()
           return handleParent(left, right) -> 0*/
 
-          return splitLeaf(left, data, check)
+          return splitLeaf(left, data)
         }
 
         val (ok, n) = left.insert(data)
@@ -357,15 +357,13 @@ class MainSpec extends AnyFlatSpec with Repeatable {
             case Some(leaf) =>
 
               val last = leaf.last
-              var check = false
 
               // If not the last block (or the only one), filter it
               if(!ord.gt(k, last)){
-                check = true
                 list = list.takeWhile{case (k, _) => ord.lt(k, last)}
               }
 
-              insertLeaf(leaf, list, check)
+              insertLeaf(leaf, list)
           }
 
           pos += n
