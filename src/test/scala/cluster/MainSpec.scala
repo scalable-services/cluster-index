@@ -2,68 +2,90 @@ package cluster
 
 import com.google.common.primitives.UnsignedBytes
 import org.apache.commons.lang3.RandomStringUtils
-import org.scalatest.flatspec.AnyFlatSpec
 
-import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
-import scala.collection.concurrent.TrieMap
+import java.util.concurrent.atomic.AtomicReference
+import scala.language.postfixOps
 
-class MainSpec extends AnyFlatSpec with Repeatable {
+class MainSpec extends Repeatable {
 
   override val times = 1
 
-  val rand = ThreadLocalRandom.current()
-  //val comp = UnsignedBytes.lexicographicalComparator()
+  "index data " must "be equal to list data" in {
 
-  implicit val ord = new Ordering[String] {
-    override def compare(x: String, y: String): Int = x.compareTo(y)
-  }
+    val rand = ThreadLocalRandom.current()
 
-  val NUM_LEAF_ENTRIES = rand.nextInt(10, 64)
-  /*val NUM_META_ENTRIES = 10
-
-  val MIN = NUM_LEAF_ENTRIES/2
-  val MAX = NUM_LEAF_ENTRIES*/
-
-  /*implicit val ord = new Ordering[Array[Byte]] {
-    override def compare(x: Array[Byte], y: Array[Byte]): Int = comp.compare(x, y)
-  }*/
-
-  "it " should " successfully perform operations" in {
-
-    val index = new Index[String, String](NUM_LEAF_ENTRIES)
-    var data = Seq.empty[Tuple2[String, String]]
-
-    for(i<-0 until 10){
-
-      var list = Seq.empty[Tuple2[String, String]]
-
-      for(j<-0 until rand.nextInt(10, 1000)){
-
-        val k = RandomStringUtils.randomAlphabetic(5, 10)
-
-        if(!data.exists{case (k1, v) =>ord.compare(k, k1) == 0 }){
-          list = list :+ k -> k
-        }
-
-      }
-
-      val (ok, n) = index.insert(list)
-
-      data = data ++ list
-
-      assert(ok && n == list.length)
+    implicit val ord = new Ordering[Bytes] {
+      val c = UnsignedBytes.lexicographicalComparator()
+      override def compare(x: Bytes, y: Bytes): Int = c.compare(x, y)
     }
 
-    val dsorted = data.map(_._1).sorted
-    val isorted = index.inOrder().map(_._1)
+    val ref = new AtomicReference[Option[String]](None)
+    implicit val cache = new MemoryCache()
+    var data = Seq.empty[Tuple]
 
-    println(s"isorted: $isorted\n")
-    println(s"dsorted: $dsorted")
+    val NUM_LEAF_ELEMENTS = 8
+    val NUM_META_ELEMENTS = 8
 
-    println(s"average dgree: ${index.prettyPrint()}")
+    val index = new Index(None, NUM_LEAF_ELEMENTS, NUM_META_ELEMENTS)
 
-    println(s"n: ${dsorted.length} degree: ${index.MIN} - ${index.MAX}")
+    def insert(): Unit = {
+      val n = rand.nextInt(1, 1000)
+
+      var list = Seq.empty[(Bytes, Bytes)]
+
+      for(i<-0 until n){
+        val e = RandomStringUtils.randomAlphanumeric(rand.nextInt(5, 10)).getBytes()
+        list = list :+ e -> e
+      }
+
+      if(index.insert(list)._1 && cache.save(index.ctx)){
+        data = data ++ list
+      }
+    }
+
+    def remove(): Unit = {
+      if(data.isEmpty) return
+
+      val list = if(data.length > 2) scala.util.Random.shuffle(data.slice(0, rand.nextInt(1, data.length)))
+      else data
+
+      if(index.remove(list.map(_._1))._1 && cache.save(index.ctx)){
+        data = data.filterNot{case (k, _) => list.exists{case (k1, _) => ord.equiv(k, k1)}}
+      }
+    }
+
+    def update(): Unit = {
+      var list = index.inOrder()
+
+      if(list.isEmpty) return
+
+      list = if(list.length > 2) scala.util.Random.shuffle(list.slice(0, rand.nextInt(1, list.length)))
+      else list
+
+      list = list.map{case (k, _) => k -> RandomStringUtils.randomAlphanumeric(5, 10).getBytes()}
+
+      if(index.update(list)._1 && cache.save(index.ctx)){
+        data = data.filterNot{case (k, _) => list.exists{case (k1, _) => ord.equiv(k, k1)}}
+        data = data ++ list
+      }
+    }
+
+    for(i<-0 until 10){
+      rand.nextInt(1, 3) match {
+        case 1 => insert()
+        case 2 => remove()
+        case _ => update()
+      }
+    }
+
+    val dsorted = data.sortBy(_._1)
+    val isorted = index.inOrder()
+
+    //index.prettyPrint()
+
+    println(s"dsorted: ${dsorted.map{case (k, v) => new String(k) -> new String(v)}}\n")
+    println(s"isorted: ${isorted.map{case (k, v) => new String(k) -> new String(v)}}\n")
 
     assert(isorted.equals(dsorted))
   }
