@@ -149,8 +149,6 @@ class Index(val root: Option[String],
 
     var count = 0
 
-    assert(!data.isEmpty)
-
     val (k, _) = data(0)
     val leftLast = left.last
     val rightLast = right.last
