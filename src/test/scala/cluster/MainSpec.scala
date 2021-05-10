@@ -9,7 +9,7 @@ import scala.language.postfixOps
 
 class MainSpec extends Repeatable {
 
-  override val times = 1
+  override val times = 10
 
   "index data " must "be equal to list data" in {
 
@@ -20,12 +20,11 @@ class MainSpec extends Repeatable {
       override def compare(x: Bytes, y: Bytes): Int = c.compare(x, y)
     }
 
-    val ref = new AtomicReference[Option[String]](None)
     implicit val cache = new MemoryCache()
     var data = Seq.empty[Tuple]
 
-    val NUM_LEAF_ELEMENTS = 8
-    val NUM_META_ELEMENTS = 8
+    val NUM_LEAF_ELEMENTS = 32
+    val NUM_META_ELEMENTS = 32
 
     val index = new Index(None, NUM_LEAF_ELEMENTS, NUM_META_ELEMENTS)
 

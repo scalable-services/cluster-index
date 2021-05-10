@@ -78,7 +78,6 @@ class Meta(override val id: String,
     }
 
     pointers = pointers.filterNot{case (k, _) => data.exists(ord.equiv(_, k))}
-
     setPointers()
 
     true -> data.length

@@ -144,6 +144,40 @@ class Index(val root: Option[String],
     }
   }
 
+  def splitLeaf(left: Leaf, data: Seq[Tuple]): (Boolean, Int) = {
+    val right = left.split()
+
+    var count = 0
+
+    assert(!data.isEmpty)
+
+    val (k, _) = data(0)
+    val leftLast = left.last
+    val rightLast = right.last
+
+    var list = data
+
+    // Avoids searching for the path again! :)
+    if(ord.gt(k, leftLast)){
+
+      if(!ord.gt(k, rightLast)){
+        list = list.takeWhile{case (k, _) => ord.lt(k, rightLast)}
+      }
+
+      val (rok, rn) = right.insert(list)
+
+      count += rn
+
+    } else {
+      val (lok, ln) = left.insert(list.takeWhile{case (k, _) => ord.lt(k, leftLast)})
+      count += ln
+    }
+
+    println(s"count: ${count}")
+
+    handleParent(left, right) -> count
+  }
+
   def insert(leaf: Leaf, data: Seq[Tuple]): (Boolean, Int) = {
 
     val left = leaf.copy()
@@ -152,8 +186,10 @@ class Index(val root: Option[String],
 
       println(s"leaf full ! Splitting...")
 
-      val right = left.split()
-      return handleParent(left, right) -> 0
+      /*val right = left.split()
+      return handleParent(left, right) -> 0*/
+
+      return splitLeaf(leaf, data)
     }
 
     println(s"leaf not full! Inserting...")
@@ -182,12 +218,18 @@ class Index(val root: Option[String],
 
       val (ok, n) = find(k) match {
         case None => insertEmpty(list)
-        case Some(p) =>
+        case Some(leaf) =>
 
-          val idx = list.indexWhere{case (k, _) => ord.gt(k, p.last)}
-          if(idx > 0) list = list.slice(0, idx)
+          val last = leaf.last
 
-          insert(p, list)
+          /*val idx = list.indexWhere{case (k, _) => ord.gt(k, leaf.last)}
+          if(idx > 0) list = list.slice(0, idx)*/
+
+          if(!ord.gt(k, last)){
+            list = list.takeWhile{case (k, _) => ord.lt(k, last)}
+          }
+
+          insert(leaf, list)
       }
 
       if(!ok) return false -> 0
@@ -450,8 +492,14 @@ class Index(val root: Option[String],
         case None => false -> 0
         case Some(leaf) =>
 
-          val idx = list.indexWhere {k => ord.gt(k, leaf.last)}
-          list = if(idx > 0) list.slice(0, idx) else list
+          val last = leaf.last
+
+          /*val idx = list.indexWhere {k => ord.gt(k, leaf.last)}
+          list = if(idx > 0) list.slice(0, idx) else list*/
+
+          if(!ord.gt(k, last)){
+            list = list.takeWhile{ord.lteq(_, last)}
+          }
 
           remove(leaf, list)
       }
