@@ -1,92 +1,89 @@
 package cluster
 
-import com.google.common.primitives.UnsignedBytes
+import com.google.common.base.Charsets
+import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
+import org.slf4j.LoggerFactory
+import services.scalable.index.{Bytes, Commands, Context, IdGenerator, QueryableIndex, Tuple}
+import services.scalable.index.impl._
 
-import java.util.concurrent.ThreadLocalRandom
-import java.util.concurrent.atomic.AtomicReference
-import scala.language.postfixOps
+import java.util.UUID
+import scala.concurrent.Await
+import scala.concurrent.duration.Duration
 
 class MainSpec extends Repeatable {
 
-  override val times = 10
+  override val times: Int = 1
 
-  "index data " must "be equal to list data" in {
+  "operations" should " run successfully" in {
+
+    val logger = LoggerFactory.getLogger(this.getClass)
 
     val rand = ThreadLocalRandom.current()
+    import scala.concurrent.ExecutionContext.Implicits.global
 
-    implicit val ord = new Ordering[Bytes] {
-      val c = UnsignedBytes.lexicographicalComparator()
-      override def compare(x: Bytes, y: Bytes): Int = c.compare(x, y)
+    type K = Bytes
+    type V = Bytes
+
+    import services.scalable.index.DefaultComparators._
+    import services.scalable.index.DefaultSerializers._
+
+    val NUM_LEAF_ENTRIES = 4//rand.nextInt(5, 64)
+    val NUM_META_ENTRIES = 4//rand.nextInt(5, 64)
+
+    val indexId = UUID.randomUUID().toString
+
+    implicit val idGenerator = new IdGenerator {
+      override def generateId[K, V](ctx: Context[K, V]): String = UUID.randomUUID.toString
+      override def generatePartition[K, V](ctx: Context[K, V]): String = "p0"
     }
 
-    implicit val cache = new MemoryCache()
-    var data = Seq.empty[Tuple]
+    implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
+    implicit val storage = new MemoryStorage(NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
+    //implicit val storage = new CassandraStorage(TestConfig.KEYSPACE, NUM_LEAF_ENTRIES, NUM_META_ENTRIES, false)
 
-    val NUM_LEAF_ELEMENTS = 32
-    val NUM_META_ELEMENTS = 32
+    val indexContext = Await.result(storage.loadOrCreateIndex(indexId, NUM_LEAF_ENTRIES, NUM_META_ENTRIES), Duration.Inf)
 
-    val index = new Index(None, NUM_LEAF_ELEMENTS, NUM_META_ELEMENTS)
+    var data = Seq.empty[(K, V)]
+    val index = new QueryableIndex[K, V](indexContext)
 
     def insert(): Unit = {
-      val n = rand.nextInt(1, 1000)
-
-      var list = Seq.empty[(Bytes, Bytes)]
+      val n = 100//rand.nextInt(1, 100)
+      var list = Seq.empty[Tuple[K, V]]
 
       for(i<-0 until n){
-        val e = RandomStringUtils.randomAlphanumeric(rand.nextInt(5, 10)).getBytes()
-        list = list :+ e -> e
+        val k = RandomStringUtils.randomAlphanumeric(5, 10).getBytes(Charsets.UTF_8)
+        val v = RandomStringUtils.randomAlphanumeric(5).getBytes(Charsets.UTF_8)
+
+        if(!data.exists{case (k1, _) => ord.equiv(k, k1)}){
+          list = list :+ (k -> v)
+        }
       }
 
-      if(index.insert(list)._1 && cache.save(index.ctx)){
+      val cmds = Seq(
+        Commands.Insert(indexId, list)
+      )
+      val result = Await.result(index.execute(cmds), Duration.Inf)
+
+      index.snapshot()
+
+      if(result){
         data = data ++ list
       }
     }
 
-    def remove(): Unit = {
-      if(data.isEmpty) return
+    insert()
+    insert()
 
-      val list = if(data.length > 2) scala.util.Random.shuffle(data.slice(0, rand.nextInt(1, data.length)))
-      else data
+    logger.info(Await.result(index.save(), Duration.Inf).toString)
 
-      if(index.remove(list.map(_._1))._1 && cache.save(index.ctx)){
-        data = data.filterNot{case (k, _) => list.exists{case (k1, _) => ord.equiv(k, k1)}}
-      }
-    }
+    val dlist = data.sortBy(_._1)
+    val ilist = Await.result(TestHelper.all(index.inOrder()), Duration.Inf)
 
-    def update(): Unit = {
-      var list = index.inOrder()
+    logger.debug(s"${Console.GREEN_B}tdata: ${dlist.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
+    logger.debug(s"${Console.MAGENTA_B}idata: ${ilist.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
 
-      if(list.isEmpty) return
-
-      list = if(list.length > 2) scala.util.Random.shuffle(list.slice(0, rand.nextInt(1, list.length)))
-      else list
-
-      list = list.map{case (k, _) => k -> RandomStringUtils.randomAlphanumeric(5, 10).getBytes()}
-
-      if(index.update(list)._1 && cache.save(index.ctx)){
-        data = data.filterNot{case (k, _) => list.exists{case (k1, _) => ord.equiv(k, k1)}}
-        data = data ++ list
-      }
-    }
-
-    for(i<-0 until 10){
-      rand.nextInt(1, 3) match {
-        case 1 => insert()
-        case 2 => remove()
-        case _ => update()
-      }
-    }
-
-    val dsorted = data.sortBy(_._1)
-    val isorted = index.inOrder()
-
-    //index.prettyPrint()
-
-    println(s"dsorted: ${dsorted.map{case (k, v) => new String(k) -> new String(v)}}\n")
-    println(s"isorted: ${isorted.map{case (k, v) => new String(k) -> new String(v)}}\n")
-
-    assert(isorted.equals(dsorted))
+    assert(TestHelper.isColEqual(dlist, ilist))
   }
 
 }
