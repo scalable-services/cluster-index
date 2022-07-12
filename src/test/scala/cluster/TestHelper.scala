@@ -1,12 +1,11 @@
 package cluster
 
 import services.scalable.index.{AsyncIterator, Block, Context, Leaf, Meta, Tuple}
-
 import scala.concurrent.{ExecutionContext, Future}
 
 object TestHelper {
 
-  def inOrder[K, V](start: Block[K,V])(implicit ctx: Context[K, V], ec: ExecutionContext): Future[Seq[Tuple[K,V]]] = {
+  def inOrder[K, V](ctxId: String, start: Block[K,V])(implicit ctx: Context[K, V], ec: ExecutionContext): Future[Seq[Tuple[K,V]]] = {
     start match {
       case leaf: Leaf[K,V] => Future.successful(leaf.inOrder())
       case meta: Meta[K,V] =>
@@ -21,7 +20,7 @@ object TestHelper {
 
           //ctx.setParent(c, i, Some(meta))
 
-          data = data :+ i -> ctx.get(c.unique_id).flatMap{b => inOrder(b)}
+          data = data :+ i -> ctx.get(c.unique_id).flatMap{b => inOrder(ctxId, b)}
         }
 
         //meta.setPointers()
@@ -32,8 +31,8 @@ object TestHelper {
     }
   }
 
-  def inOrder[K, V](root: (String, String))(implicit ctx: Context[K, V], ec: ExecutionContext): Future[Seq[Tuple[K,V]]] = {
-    ctx.get(root).flatMap{b => inOrder(b)}
+  def inOrder[K, V](ctxId: String, root: (String, String))(implicit ctx: Context[K, V], ec: ExecutionContext): Future[Seq[Tuple[K,V]]] = {
+    ctx.get(root).flatMap{b => inOrder(ctxId, b)}
   }
 
   def all[K, V](it: AsyncIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
