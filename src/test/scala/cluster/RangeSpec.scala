@@ -4,74 +4,27 @@ import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
-import services.scalable.index.grpc.DBContext
+import services.scalable.index.grpc.{DBContext, IndexContext, IndexView, RootRef}
 import services.scalable.index.impl._
-import services.scalable.index.{Block, Bytes, Cache, Commands, Context, DB, IdGenerator, Leaf, Meta, Serializer, Storage, Tuple}
+import services.scalable.index.{Block, Bytes, Cache, Commands, Context, DB, IdGenerator, Leaf, Meta, QueryableIndex, Serializer, Storage, Tuple}
 
 import java.util.UUID
-import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.duration.Duration
 
-class RangeSpec extends Repeatable {
+class SplitSpec extends Repeatable {
 
-  class Range[K, V](var ctx: DBContext, val NUM_ENTRIES: Int)(implicit val ec: ExecutionContext,
+  class Range[K, V](private var ctx: DBContext, val NUM_ENTRIES: Int)(implicit val ec: ExecutionContext,
                                           val storage: Storage,
                                           val serializer: Serializer[Block[K, V]],
                                           val cache: Cache,
                                           val ord: Ordering[K],
                                           val idGenerator: IdGenerator){
-    val db = new DB[K, V](ctx)
+    var db = new DB[K, V](ctx)
     val MIN = NUM_ENTRIES/2
 
     def execute(cmds: Seq[Commands.Insert[K, V]]): Future[Boolean] = {
       db.execute(cmds)
-    }
-
-    def split(): Future[Range[K, V]] = {
-      val index = db.indexes("main")
-      implicit val indexCtx = index.ctx
-      val rootId = indexCtx.root.get
-
-      def splitMeta(block: Meta[K, V]): Range[K, V] = {
-        val right = block.split()
-
-        val newRoot = indexCtx.createMeta()
-
-        val leftPointer = if(block.length == 1) block.pointers(0)._2 else block.unique_id
-        val rightPointer = if(right.length == 1) right.pointers(0)._2 else right.unique_id
-
-        /*newRoot.insert(Seq(
-          block.last -> leftPointer,
-          right.last -> rightPointer
-        ))*/
-
-        indexCtx.root = Some(block.unique_id)
-
-        val rightDBCtx = DBContext()
-        val rightRange = new Range[K, V](rightDBCtx, NUM_ENTRIES)
-
-        rightRange.db.createIndex("main", index.ctx.NUM_LEAF_ENTRIES, index.ctx.NUM_META_ENTRIES)
-        rightRange.db.createIndex("history", index.ctx.NUM_LEAF_ENTRIES, index.ctx.NUM_META_ENTRIES)
-
-        val rightIndex = rightRange.db.indexes("main")
-        val rightCtx = rightIndex.ctx
-
-        rightCtx.root = Some(right.unique_id)
-
-        //rightCtx.blocks = this.db.indexes("main").ctx.
-
-        //rightCtx.num_elements = right.length
-        //rightCtx.levels = indexCtx.levels - 1
-
-        rightRange
-      }
-
-      indexCtx.get(rootId).map { root =>
-        root match {
-          case leaf: Leaf[K, V] => null
-          case meta: Meta[K, V] => splitMeta(meta)
-        }
-      }
     }
 
     def isFull(): Boolean = {
@@ -86,6 +39,80 @@ class RangeSpec extends Repeatable {
       val ctx = index.ctx
 
       ctx.num_elements >= MIN
+    }
+
+    def save(): Future[DBContext] = {
+      db.save().map { c =>
+        ctx = c
+        c
+      }
+    }
+
+    def split(): Future[Range[K, V]] = {
+      val index = db.findLatestIndex("main").get
+
+      for {
+        leftRootBlock <- index.ctx.get(index.ctx.root.get)
+        rightRootBlock = leftRootBlock.split()(index.ctx)
+
+        leftPointer = leftRootBlock match {
+          case leaf: Leaf[K, V] => leaf.unique_id
+          case meta: Meta[K, V] => if(meta.length == 1) meta.pointers(0)._2.unique_id else meta.unique_id
+        }
+
+        rightPointer = rightRootBlock match {
+          case leaf: Leaf[K, V] => leaf.unique_id
+          case meta: Meta[K, V] => if(meta.length == 1) meta.pointers(0)._2.unique_id else meta.unique_id
+        }
+
+        (leftLink, rightLink) <- Future.sequence(Seq(index.ctx.get(leftPointer), index.ctx.get(rightPointer))).map { links =>
+          (links(0), links(1))
+        }
+      } yield {
+
+        println(leftLink.unique_id, rightLink.unique_id)
+
+        // To check the subtrees...
+        val diviser = leftLink.last
+
+        val (leftP, leftId) = leftLink.unique_id
+        val leftIndexCtx = IndexContext("main", index.ctx.NUM_LEAF_ENTRIES, index.ctx.NUM_META_ENTRIES,
+          Some(RootRef(leftP, leftId)), leftLink.level, leftLink.nSubtree)
+
+        val left = new QueryableIndex[K, V](leftIndexCtx)
+
+        db.indexes = Map("main" -> left)
+
+        val leftDBContext = DBContext("left")
+          .withLatest(IndexView.of(System.nanoTime(), Map("main" -> leftIndexCtx)))
+
+        db.ctx = leftDBContext
+
+        val (rightP, rightId) = rightLink.unique_id
+        val rightIndexCtx = IndexContext("main", index.ctx.NUM_LEAF_ENTRIES, index.ctx.NUM_META_ENTRIES,
+          Some(RootRef(rightP, rightId)), rightLink.level, rightLink.nSubtree)
+
+        val rightDBContext = DBContext("right")
+          .withLatest(IndexView.of(System.nanoTime(), Map("main" -> rightIndexCtx)))
+
+        val right = new QueryableIndex[K, V](rightIndexCtx)
+        val rightRange = new Range[K, V](rightDBContext, NUM_ENTRIES)
+        rightRange.db.indexes = Map("main" -> right)
+
+        index.ctx.blocks.foreach { case (k, b) =>
+          val last = b.last
+
+          index.ctx.blocks.remove(k)
+
+          if(ord.lteq(last, diviser)){
+            left.ctx.blocks.put(k, b)
+          } else {
+            right.ctx.blocks.put(k, b)
+          }
+        }
+
+        rightRange
+      }
     }
   }
 
@@ -116,19 +143,18 @@ class RangeSpec extends Repeatable {
     implicit val storage = new MemoryStorage(NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
     //implicit val storage = new CassandraStorage(TestConfig.KEYSPACE, NUM_LEAF_ENTRIES, NUM_META_ENTRIES, false)
 
-    var db = new DB[K, V]()
+    val dbContext = DBContext("left")
+    var left = new Range[K, V](dbContext, 200)
 
     val indexId = "main"
 
-    db.createIndex(indexId, NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
-    db.createHistory("history", NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
+    left.db.createIndex(indexId, NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
+    //left.db.createHistory("history", NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
 
     var data = Seq.empty[(K, V)]
 
-    val range = new Range[K, V](db.ctx, 200)
-
-    def insert(): Unit = {
-      val n = 200//rand.nextInt(1, 100)
+    def insert(range: Range[K, V]): Unit = {
+      val n = rand.nextInt(200, 400)
       var list = Seq.empty[Tuple[K, V]]
 
       for(i<-0 until n){
@@ -151,43 +177,33 @@ class RangeSpec extends Repeatable {
       }
     }
 
-    insert()
+    insert(left)
 
-    db = range.db
-
-    Await.result(db.save(), Duration.Inf)
-
-    println("isFull ", range.isFull())
-
-    if(range.isFull()){
-
-      val list = Await.result(TestHelper.all(range.db.indexes("main").inOrder()), Duration.Inf)
-
-      logger.debug(s"${Console.MAGENTA_B}left: ${list.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
-
-      val right = Await.result(range.split(), Duration.Inf)
-
-      val leftIndex = range.db.findLatestIndex("main").get
-      val rightIndex = right.db.findLatestIndex("main").get
-
-      val leftList = Await.result(TestHelper.all(leftIndex.inOrder()), Duration.Inf)
-      val rightList = Await.result(TestHelper.all(rightIndex.inOrder()), Duration.Inf)
-
-      val mergedList = leftList ++ rightList
-
-      logger.debug(s"${Console.GREEN_B}left: ${leftList.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
-      logger.debug(s"${Console.RED_B}right: ${rightList.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
-
-      assert(TestHelper.isColEqual(mergedList, list))
-    }
-
-    /*val index = db.findLatestIndex("main").get
+    val index = left.db.findLatestIndex("main").get
 
     val list = Await.result(TestHelper.all(index.inOrder()), Duration.Inf)
 
-    logger.debug(s"${Console.GREEN_B}tdata: ${list.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
+    logger.debug(s"${Console.GREEN_B}original left with len ${list.length}: ${list.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
 
-    logger.info(s"${Console.YELLOW_B}n: ${index.ctx.num_elements} levels: ${index.ctx.levels}${Console.RESET}")*/
+    var right = Await.result(left.split(), Duration.Inf)
+
+    insert(left)
+    //insert(right)
+
+    /*val leftCtx = Await.result(left.save(), Duration.Inf)
+    val rightCtx = Await.result(right.save(), Duration.Inf)
+
+    left = new Range[K, V](leftCtx, 200)
+    right = new Range[K, V](rightCtx, 200)*/
+
+    val leftIndex = left.db.findLatestIndex("main").get
+    val leftList = Await.result(TestHelper.all(leftIndex.inOrder()), Duration.Inf)
+
+    val rightIndex = right.db.findLatestIndex("main").get
+    val rightList = Await.result(TestHelper.all(rightIndex.inOrder()), Duration.Inf)
+
+    logger.debug(s"${Console.MAGENTA_B}left list with len ${leftList.length}: ${leftList.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
+    logger.debug(s"${Console.GREEN_B}right list with len ${rightList.length}: ${rightList.map{case (k, v) => new String(k, Charsets.UTF_8) -> new String(v)}}${Console.RESET}\n")
 
   }
 
