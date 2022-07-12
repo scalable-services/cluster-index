@@ -16,7 +16,7 @@ libraryDependencies ++= Seq(
   "com.google.guava" % "guava" % "27.1-jre",
   "org.apache.commons" % "commons-lang3" % "3.8.1",
 
-  "services.scalable" %% "index" % "0.12",
+  "services.scalable" %% "index" % "0.15",
   "org.apache.commons" % "commons-compress" % "1.21"
 )
 

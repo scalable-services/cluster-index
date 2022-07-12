@@ -4,117 +4,15 @@ import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
-import services.scalable.index.grpc.{DBContext, IndexContext, IndexView, RootRef}
+import services.scalable.index.grpc.{DBContext, IndexView}
 import services.scalable.index.impl._
-import services.scalable.index.{Block, Bytes, Cache, Commands, Context, DB, IdGenerator, Leaf, Meta, QueryableIndex, Serializer, Storage, Tuple}
+import services.scalable.index.{Bytes, Commands, Context, IdGenerator, Tuple}
 
 import java.util.UUID
-import scala.concurrent.{Await, ExecutionContext, Future}
+import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
-class SplitSpec extends Repeatable {
-
-  class Range[K, V](private var ctx: DBContext, val NUM_ENTRIES: Int)(implicit val ec: ExecutionContext,
-                                          val storage: Storage,
-                                          val serializer: Serializer[Block[K, V]],
-                                          val cache: Cache,
-                                          val ord: Ordering[K],
-                                          val idGenerator: IdGenerator){
-    var db = new DB[K, V](ctx)
-    val MIN = NUM_ENTRIES/2
-
-    def execute(cmds: Seq[Commands.Insert[K, V]]): Future[Boolean] = {
-      db.execute(cmds)
-    }
-
-    def isFull(): Boolean = {
-      val index = db.findLatestIndex("main").get
-      val ctx = index.ctx
-
-      ctx.num_elements >= NUM_ENTRIES
-    }
-
-    def hasMinimum(): Boolean = {
-      val index = db.findLatestIndex("main").get
-      val ctx = index.ctx
-
-      ctx.num_elements >= MIN
-    }
-
-    def save(): Future[DBContext] = {
-      db.save().map { c =>
-        ctx = c
-        c
-      }
-    }
-
-    def split(): Future[Range[K, V]] = {
-      val index = db.findLatestIndex("main").get
-
-      for {
-        leftRootBlock <- index.ctx.get(index.ctx.root.get)
-        rightRootBlock = leftRootBlock.split()(index.ctx)
-
-        leftPointer = leftRootBlock match {
-          case leaf: Leaf[K, V] => leaf.unique_id
-          case meta: Meta[K, V] => if(meta.length == 1) meta.pointers(0)._2.unique_id else meta.unique_id
-        }
-
-        rightPointer = rightRootBlock match {
-          case leaf: Leaf[K, V] => leaf.unique_id
-          case meta: Meta[K, V] => if(meta.length == 1) meta.pointers(0)._2.unique_id else meta.unique_id
-        }
-
-        (leftLink, rightLink) <- Future.sequence(Seq(index.ctx.get(leftPointer), index.ctx.get(rightPointer))).map { links =>
-          (links(0), links(1))
-        }
-      } yield {
-
-        println(leftLink.unique_id, rightLink.unique_id)
-
-        // To check the subtrees...
-        val diviser = leftLink.last
-
-        val (leftP, leftId) = leftLink.unique_id
-        val leftIndexCtx = IndexContext("main", index.ctx.NUM_LEAF_ENTRIES, index.ctx.NUM_META_ENTRIES,
-          Some(RootRef(leftP, leftId)), leftLink.level, leftLink.nSubtree)
-
-        val left = new QueryableIndex[K, V](leftIndexCtx)
-
-        db.indexes = Map("main" -> left)
-
-        val leftDBContext = DBContext("left")
-          .withLatest(IndexView.of(System.nanoTime(), Map("main" -> leftIndexCtx)))
-
-        db.ctx = leftDBContext
-
-        val (rightP, rightId) = rightLink.unique_id
-        val rightIndexCtx = IndexContext("main", index.ctx.NUM_LEAF_ENTRIES, index.ctx.NUM_META_ENTRIES,
-          Some(RootRef(rightP, rightId)), rightLink.level, rightLink.nSubtree)
-
-        val rightDBContext = DBContext("right")
-          .withLatest(IndexView.of(System.nanoTime(), Map("main" -> rightIndexCtx)))
-
-        val right = new QueryableIndex[K, V](rightIndexCtx)
-        val rightRange = new Range[K, V](rightDBContext, NUM_ENTRIES)
-        rightRange.db.indexes = Map("main" -> right)
-
-        index.ctx.blocks.foreach { case (k, b) =>
-          val last = b.last
-
-          index.ctx.blocks.remove(k)
-
-          if(ord.lteq(last, diviser)){
-            left.ctx.blocks.put(k, b)
-          } else {
-            right.ctx.blocks.put(k, b)
-          }
-        }
-
-        rightRange
-      }
-    }
-  }
+class RangeSpec extends Repeatable {
 
   override val times: Int = 1
 
