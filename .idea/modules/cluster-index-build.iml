@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<module external.linked.project.id="cluster-index-build" external.linked.project.path="$MODULE_DIR$/../../project" external.root.project.path="$MODULE_DIR$/../.." external.system.id="SBT" sbt.imports="_root_.sbt.Keys._, _root_.sbt.ScriptedPlugin.autoImport._, _root_.sbt.plugins.JUnitXmlReportPlugin.autoImport._, _root_.sbt.plugins.MiniDependencyTreePlugin.autoImport._, _root_.akka.grpc.sbt.AkkaGrpcPlugin.autoImport._, _root_.sbtprotoc.ProtocPlugin.autoImport._, _root_.org.portablescala.sbtplatformdeps.PlatformDepsPlugin.autoImport._, _root_.sbt._, _root_.sbt.nio.Keys._, _root_.sbt.plugins.IvyPlugin, _root_.sbt.plugins.JvmPlugin, _root_.sbt.plugins.CorePlugin, _root_.sbt.ScriptedPlugin, _root_.sbt.plugins.SbtPlugin, _root_.sbt.plugins.SemanticdbPlugin, _root_.sbt.plugins.JUnitXmlReportPlugin, _root_.sbt.plugins.Giter8TemplatePlugin, _root_.sbt.plugins.MiniDependencyTreePlugin, _root_.akka.grpc.sbt.AkkaGrpcPlugin, _root_.sbtprotoc.ProtocPlugin, _root_.org.portablescala.sbtplatformdeps.PlatformDepsPlugin, _root_.scala.xml.{TopScope=&amp;amp;gt;SUB:DOLLARscope}" sbt.resolvers="file:/$USER_HOME$/.sbt/preloaded|maven|local-preloaded, https://oss.sonatype.org/content/repositories/releases|maven|sonatype-releases, https://oss.sonatype.org/content/repositories/snapshots|maven|sonatype-snapshots, https://repo1.maven.org/maven2/|maven|public, D:\Users\lucas\.ivy2\cache|ivy|Local cache" type="SBT_MODULE" version="4">
+<module external.linked.project.id="cluster-index-build" external.linked.project.path="$MODULE_DIR$/../../project" external.root.project.path="$MODULE_DIR$/../.." external.system.id="SBT" sbt.imports="_root_.sbt.Keys._, _root_.sbt.ScriptedPlugin.autoImport._, _root_.sbt.plugins.JUnitXmlReportPlugin.autoImport._, _root_.sbt.plugins.MiniDependencyTreePlugin.autoImport._, _root_.akka.grpc.sbt.AkkaGrpcPlugin.autoImport._, _root_.sbtprotoc.ProtocPlugin.autoImport._, _root_.org.portablescala.sbtplatformdeps.PlatformDepsPlugin.autoImport._, _root_.sbt._, _root_.sbt.nio.Keys._, _root_.sbt.plugins.IvyPlugin, _root_.sbt.plugins.JvmPlugin, _root_.sbt.plugins.CorePlugin, _root_.sbt.ScriptedPlugin, _root_.sbt.plugins.SbtPlugin, _root_.sbt.plugins.SemanticdbPlugin, _root_.sbt.plugins.JUnitXmlReportPlugin, _root_.sbt.plugins.Giter8TemplatePlugin, _root_.sbt.plugins.MiniDependencyTreePlugin, _root_.akka.grpc.sbt.AkkaGrpcPlugin, _root_.sbtprotoc.ProtocPlugin, _root_.org.portablescala.sbtplatformdeps.PlatformDepsPlugin, _root_.scala.xml.{TopScope=&amp;amp;amp;gt;SUB:DOLLARscope}" sbt.resolvers="file:/$USER_HOME$/.sbt/preloaded|maven|local-preloaded, https://oss.sonatype.org/content/repositories/releases|maven|sonatype-releases, https://oss.sonatype.org/content/repositories/snapshots|maven|sonatype-snapshots, https://repo1.maven.org/maven2/|maven|public, D:\Users\lucas\.ivy2\cache|ivy|Local cache" type="SBT_MODULE" version="4">
   <component name="NewModuleRootManager">
     <output url="file://$MODULE_DIR$/../../project/target/idea-classes" />
     <output-test url="file://$MODULE_DIR$/../../project/target/idea-test-classes" />
@@ -103,18 +103,18 @@
           <root url="jar://$USER_HOME$/.sbt/boot/scala-2.12.15/org.scala-sbt/sbt/1.6.2/zinc-persist-core-assembly-1.6.0.jar!/" />
           <root url="jar://$USER_HOME$/.sbt/boot/scala-2.12.15/org.scala-sbt/sbt/1.6.2/zinc-persist_2.12-1.6.0.jar!/" />
           <root url="jar://$USER_HOME$/.sbt/boot/scala-2.12.15/org.scala-sbt/sbt/1.6.2/zinc_2.12-1.6.0.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo.scala-sbt.org/scalasbt/sbt-plugin-releases/org.portable-scala/sbt-platform-deps/scala_2.12/sbt_1.0/1.0.0/jars/sbt-platform-deps.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/com/google/protobuf/protobuf-java/3.15.8/protobuf-java-3.15.8.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/com/lightbend/akka/grpc/akka-grpc-codegen_2.12/2.1.0/akka-grpc-codegen_2.12-2.1.0.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/com/lightbend/akka/grpc/sbt-akka-grpc_2.12_1.0/2.1.0/sbt-akka-grpc-2.1.0.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/com/thesamet/sbt-protoc_2.12_1.0/1.0.4/sbt-protoc-1.0.4.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/com/thesamet/scalapb/compilerplugin_2.12/0.11.5/compilerplugin_2.12-0.11.5.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/com/thesamet/scalapb/protoc-bridge_2.12/0.9.3/protoc-bridge_2.12-0.9.3.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/com/thesamet/scalapb/protoc-gen_2.12/0.9.3/protoc-gen_2.12-0.9.3.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/com/typesafe/play/twirl-api_2.12/1.5.1/twirl-api_2.12-1.5.1.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/dev/dirs/directories/26/directories-26.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_2.12/2.5.0/scala-collection-compat_2.12-2.5.0.jar!/" />
-          <root url="jar://$USER_HOME$/AppData/Local/Coursier/cache/v1/https/repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_2.12/1.2.0/scala-xml_2.12-1.2.0.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo.scala-sbt.org/scalasbt/sbt-plugin-releases/org.portable-scala/sbt-platform-deps/scala_2.12/sbt_1.0/1.0.0/jars/sbt-platform-deps.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/google/protobuf/protobuf-java/3.15.8/protobuf-java-3.15.8.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/lightbend/akka/grpc/akka-grpc-codegen_2.12/2.1.0/akka-grpc-codegen_2.12-2.1.0.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/lightbend/akka/grpc/sbt-akka-grpc_2.12_1.0/2.1.0/sbt-akka-grpc-2.1.0.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/thesamet/sbt-protoc_2.12_1.0/1.0.4/sbt-protoc-1.0.4.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/thesamet/scalapb/compilerplugin_2.12/0.11.5/compilerplugin_2.12-0.11.5.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/thesamet/scalapb/protoc-bridge_2.12/0.9.3/protoc-bridge_2.12-0.9.3.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/thesamet/scalapb/protoc-gen_2.12/0.9.3/protoc-gen_2.12-0.9.3.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/com/typesafe/play/twirl-api_2.12/1.5.1/twirl-api_2.12-1.5.1.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/dev/dirs/directories/26/directories-26.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/modules/scala-collection-compat_2.12/2.5.0/scala-collection-compat_2.12-2.5.0.jar!/" />
+          <root url="jar://$USER_HOME$/Library/Caches/Coursier/v1/https/repo1.maven.org/maven2/org/scala-lang/modules/scala-xml_2.12/1.2.0/scala-xml_2.12-1.2.0.jar!/" />
         </CLASSES>
         <JAVADOC />
         <SOURCES />
@@ -122,8 +122,8 @@
     </orderEntry>
   </component>
   <component name="SbtModule">
-    <option name="buildForURI" value="file:/$MODULE_DIR$/../../" />
+    <option name="buildForURI" value="file:$MODULE_DIR$/../../" />
     <option name="imports" value="_root_.sbt.Keys._, _root_.sbt.ScriptedPlugin.autoImport._, _root_.sbt.plugins.JUnitXmlReportPlugin.autoImport._, _root_.sbt.plugins.MiniDependencyTreePlugin.autoImport._, _root_.akka.grpc.sbt.AkkaGrpcPlugin.autoImport._, _root_.sbtprotoc.ProtocPlugin.autoImport._, _root_.org.portablescala.sbtplatformdeps.PlatformDepsPlugin.autoImport._, _root_.sbt._, _root_.sbt.nio.Keys._, _root_.sbt.plugins.IvyPlugin, _root_.sbt.plugins.JvmPlugin, _root_.sbt.plugins.CorePlugin, _root_.sbt.ScriptedPlugin, _root_.sbt.plugins.SbtPlugin, _root_.sbt.plugins.SemanticdbPlugin, _root_.sbt.plugins.JUnitXmlReportPlugin, _root_.sbt.plugins.Giter8TemplatePlugin, _root_.sbt.plugins.MiniDependencyTreePlugin, _root_.akka.grpc.sbt.AkkaGrpcPlugin, _root_.sbtprotoc.ProtocPlugin, _root_.org.portablescala.sbtplatformdeps.PlatformDepsPlugin, _root_.scala.xml.{TopScope=&gt;SUB:DOLLARscope}" />
-    <option name="resolvers" value="https://oss.sonatype.org/service/local/repositories/releases/content/|maven|sonatype-releases, https://repo1.maven.org/maven2/|maven|public, https://oss.sonatype.org/content/repositories/snapshots|maven|sonatype-snapshots, D:\Users\lucas\.ivy2\cache|ivy|true|Local cache" />
+    <option name="resolvers" value="https://oss.sonatype.org/service/local/repositories/releases/content/|maven|sonatype-releases, https://repo1.maven.org/maven2/|maven|public, /Users/lucasrpb/.ivy2/cache|ivy|true|Local cache, https://oss.sonatype.org/content/repositories/snapshots|maven|sonatype-snapshots" />
   </component>
 </module>
