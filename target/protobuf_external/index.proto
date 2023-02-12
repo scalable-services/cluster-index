@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package services.scalable.index.grpc;
+
+import "scalapb/scalapb.proto";
+import "google/protobuf/wrappers.proto";
+
+option (scalapb.options) = {
+  single_file: true
+  flat_package: true
+  preserve_unknown_fields: false
+  preamble: "trait IndexCommand"
+};
+
+message KVPair {
+  bytes key = 1;
+  bytes value = 2;
+  string version = 3;
+}
+
+message Link {
+  bytes key = 1;
+  string partition = 2;
+  string id = 3;
+  int64 nSubtree = 4;
+  int32 level = 5;
+}
+
+message RootRef {
+  string partition = 1;
+  string id = 2;
+}
+
+message LeafBlock {
+  string id = 1;
+  string partition = 2;
+  repeated KVPair tuples = 3;
+  int32 min = 4;
+  int32 max = 5;
+
+  optional RootRef root = 6;
+  int32 level = 7;
+}
+
+message MetaBlock {
+  string id = 1;
+  string partition = 2;
+  repeated Link pointers = 3;
+  int32 min = 4;
+  int32 max = 5;
+
+  optional RootRef root = 6;
+  int32 level = 7;
+}
+
+message IndexContext {
+  string id = 1;
+  int32 num_leaf_items = 2;
+  int32 num_meta_items = 3;
+  optional RootRef root = 4;
+  int32 levels = 5;
+  int64 num_elements = 6;
+
+  int32 maxNItems = 7;
+}
+
+message TemporalContext {
+  string id = 1;
+  IndexContext latest = 2 [(scalapb.field).no_box = true];
+  IndexContext history = 3 [(scalapb.field).no_box = true];
+}
+
+message InsertCommand {
+  option (scalapb.message).extends = "services.scalable.index.grpc.IndexCommand";
+
+  repeated KVPair list = 1;
+  bool upsert = 2;
+}
+
+message RemoveCommand {
+  option (scalapb.message).extends = "services.scalable.index.grpc.IndexCommand";
+
+  repeated bytes keys = 1;
+}
+
+message UpdateCommand {
+  option (scalapb.message).extends = "services.scalable.index.grpc.IndexCommand";
+
+  repeated KVPair list = 1;
+}
+
+message DecimalValue {
+  uint32 scale = 1;
+  uint32 precision = 2;
+  bytes value = 3;
+}

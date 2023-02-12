@@ -1,0 +1,19 @@
+import cluster.grpc.KeyIndexContext
+import com.google.protobuf.any.Any
+import services.scalable.index.impl.GrpcByteSerializer
+import services.scalable.index.{Bytes, Serializer}
+
+package object cluster {
+
+  object ClusterSerializers {
+    import services.scalable.index.DefaultSerializers._
+
+    implicit val keyIndexSerializer = new Serializer[KeyIndexContext] {
+      override def serialize(t: KeyIndexContext): Bytes = Any.pack(t).toByteArray
+      override def deserialize(b: Bytes): KeyIndexContext = Any.parseFrom(b).unpack(KeyIndexContext)
+    }
+
+    implicit val grpcStringKeyIndexContextSerializer = new GrpcByteSerializer[Bytes, KeyIndexContext]()
+  }
+
+}
