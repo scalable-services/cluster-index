@@ -2,7 +2,7 @@ package cluster
 
 import cluster.grpc.KeyIndexContext
 import com.google.protobuf.ByteString
-import services.scalable.index.{AsyncIterator, Block, Bytes, Cache, Context, IdGenerator, QueryableIndex, Serializer, Storage, Tuple}
+import services.scalable.index.{AsyncIterator, Block, Bytes, Cache, Commands, Context, Errors, IdGenerator, QueryableIndex, Serializer, Storage, Tuple}
 import services.scalable.index.grpc.{IndexContext, RootRef}
 
 import java.util.UUID
@@ -273,6 +273,10 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
   def insert(data: Seq[Tuple2[K, V]])(implicit ord: Ordering[K]): Future[Int] = {
     val sorted = data.sortBy(_._1)
 
+    if (sorted.exists { case (k, _) => sorted.count { case (k1, _) => ord.equiv(k, k1) } > 1 }) {
+      return Future.failed(Errors.DUPLICATE_KEYS(data))
+    }
+
     val len = sorted.length
     var pos = 0
 
@@ -297,9 +301,8 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
           }
         case Some((last, index)) =>
 
-          val x = Await.result(all(index.inOrder()), Duration.Inf).map{ x => new String(x._1.asInstanceOf[Bytes])}
-
-          println(s"insert existing", new String(last.asInstanceOf[Bytes]), "i ", x)
+          //val x = Await.result(all(index.inOrder()), Duration.Inf).map{ x => new String(x._1.asInstanceOf[Bytes])}
+          //println(s"insert existing", new String(last.asInstanceOf[Bytes]), "i ", x)
 
           val idx = list.indexWhere { case (k, _) => ord.gt(k, last) }
           if (idx > 0) list = list.slice(0, idx)
@@ -315,6 +318,44 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     insert()
   }
 
+  def update(data: Seq[Tuple[K, V]])(implicit ord: Ordering[K]): Future[Int] = {
+
+    val sorted = data.sortBy(_._1)
+
+    if (sorted.exists { case (k, _, _) => sorted.count { case (k1, _, _) => ord.equiv(k, k1) } > 1 }) {
+      return Future.failed(Errors.DUPLICATE_KEYS(sorted))
+    }
+
+    val len = sorted.length
+    var pos = 0
+
+    def update(): Future[Int] = {
+      if (len == pos) return Future.successful(sorted.length)
+
+      var list = sorted.slice(pos, len)
+      val (k, _, _) = list(0)
+
+      findPath(k).flatMap {
+        case None => Future.failed(Errors.KEY_NOT_FOUND(k))
+        case Some((last, index)) =>
+
+          val idx = list.indexWhere { case (k, _, _) => ord.gt(k, last) }
+          if (idx > 0) list = list.slice(0, idx)
+
+          index.update(list)
+      }.flatMap { n =>
+        pos += n
+        update()
+      }
+    }
+
+    update()
+  }
+
+  /*def execute(cmds: Seq[Commands.Command[K, V]]): Future[Boolean] = {
+
+  }*/
+
   def all[K, V](it: AsyncIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
     it.hasNext().flatMap {
       case true => it.next().flatMap { list =>
@@ -324,20 +365,6 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       }
       case false => Future.successful(Seq.empty[Tuple[K, V]])
     }
-  }
-
-  def inOrder2(): Seq[(K, V, String)] = {
-    val iter = Await.result(all(meta.inOrder()), Duration.Inf)
-
-    println(s"${Console.CYAN_B}meta keys: ${iter.map(x => new String(x._1.asInstanceOf[Array[Byte]]))}${Console.RESET}")
-
-    iter.map { case (k, link, version) =>
-      val ctx = Await.result(storage.loadIndex(link.ctxId), Duration.Inf).get
-
-      println(s"range n: ${ctx.numElements}")
-      val r = Await.result(all(new QueryableIndex[K, V](ctx).inOrder()), Duration.Inf)
-      r
-    }.flatten
   }
 
   def inOrder(): Seq[(K, V, String)] = {
@@ -372,4 +399,52 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       r
     }.flatten
   }
+}
+
+object ClusterIndex {
+
+  def fromRange(rangeId: String,
+                      numLeafItems: Int,
+                      numMetaItems: Int)(implicit ec: ExecutionContext,
+                       storage: Storage,
+                       blockSerializer: Serializer[Block[Bytes, Bytes]],
+                       dbCtxSerializer: Serializer[Block[Bytes, KeyIndexContext]],
+                       cache: Cache,
+                       ord: Ordering[Bytes],
+                       idGenerator: IdGenerator): Future[(Bytes, ClusterIndex[Bytes, Bytes])] = {
+
+    val metaCtx = IndexContext()
+      .withId(UUID.randomUUID.toString)
+      .withMaxNItems(Int.MaxValue)
+      .withLevels(0)
+      .withNumLeafItems(numLeafItems)
+      .withNumMetaItems(numMetaItems)
+
+    val metaRange = new QueryableIndex[Bytes, KeyIndexContext](metaCtx)
+
+    for {
+      rangeCtx <- storage.loadIndex(rangeId).map(_.get)
+
+      rangeIndex = new QueryableIndex[Bytes, Bytes](rangeCtx)
+
+      maxRangeK <- rangeIndex.max().map(_.get).map(_._1)
+
+      n <- metaRange.insert(Seq(
+        maxRangeK -> KeyIndexContext(ByteString.copyFrom(maxRangeK), rangeCtx.id)
+      ))
+
+    } yield {
+
+      val clusterRangeCtx = metaRange.ctx.snapshot(false)
+
+      val metaCR = new ClusterIndex[Bytes, Bytes](clusterRangeCtx, 256,
+        clusterRangeCtx.numLeafItems, clusterRangeCtx.numMetaItems)
+
+      metaCR.indexes.put(rangeIndex.ctx.indexId, rangeIndex)
+
+      maxRangeK -> metaCR
+    }
+
+  }
+
 }

@@ -95,33 +95,9 @@ class MetaTaskWorker {
 
     println(s"${Console.MAGENTA_B}meta list: ${metaList}${Console.RESET}")
 
-   /* val head = task.insertRanges(0).ctx
-    val c = Await.result(TestHelper.loadIndex(head.id), Duration.Inf)
-    val idx = new QueryableIndex[K, V](c.get)
-    val rangeList = Await.result(TestHelper.all(idx.inOrder()), Duration.Inf).map { x => new String(x._1) }
-*/
-    println()
-
     val oldMetaList = Await.result(TestHelper.all(meta.inOrder()), Duration.Inf)
 
     println(s"${Console.YELLOW_B}old meta list: ${oldMetaList.map{x => new String(x._1)}}${Console.RESET}")
-
-    /*val cindex = new ClusterIndex[K, V](ctx, TestHelper.MAX_ITEMS,
-      NUM_LEAF_ENTRIES,
-      NUM_META_ENTRIES)
-
-    var ilist = Seq.empty[String]
-
-    try {
-      ilist = cindex.inOrder2().map { case (k, v, _) => k -> v }.toList.map(_._1).map { k => new String(k) }
-
-      println(s"${Console.MAGENTA_B}ilist: ${oldMetaList.map { x => new String(x._1) }}${Console.RESET}")
-
-    } catch {
-      case t => t.printStackTrace()
-    }
-
-    println()*/
 
     for {
       _ <- if(!removeList.isEmpty) meta.execute(Seq(Commands.Remove(ctx.id, removeList))) else
@@ -137,13 +113,13 @@ class MetaTaskWorker {
   val control = {
     Consumer
       .committableSource(consumerSettings, Subscriptions.topics("meta-index-tasks"))
-      /*.mapAsync(1) { msg =>
+      .mapAsync(1) { msg =>
         handler(msg).map(_ => msg.committableOffset)
-      }*/
-      .map { msg =>
+      }
+      /*.map { msg =>
         Await.result(handler(msg), Duration.Inf)
         msg.committableOffset
-      }
+      }*/
       //.log("debugging")
       .via(Committer.flow(committerSettings.withMaxBatch(1)))
       /*.toMat(Sink.ignore)(DrainingControl.apply)

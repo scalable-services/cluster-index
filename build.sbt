@@ -12,8 +12,8 @@ lazy val akkaVersion = "2.6.14"
 lazy val akkaHttpVersion = "10.2.3"
 
 ThisBuild / libraryDependencies ++= Seq(
- "services.scalable" %% "index" % "0.19",
- "services.scalable" %% "index" % "0.19" % "protobuf",
+ "services.scalable" %% "index" % "0.20",
+ "services.scalable" %% "index" % "0.20" % "protobuf",
   "com.typesafe.akka" %% "akka-http2-support" % akkaHttpVersion,
   "com.typesafe.akka" %% "akka-actor-typed" % akkaVersion,
   "com.typesafe.akka" %% "akka-stream" % akkaVersion,

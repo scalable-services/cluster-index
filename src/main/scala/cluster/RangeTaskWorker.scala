@@ -37,7 +37,7 @@ class RangeTaskWorker(val id: String) {
     .withClientId(s"range-task-worker-${id}")
     .withPollInterval(java.time.Duration.ofMillis(10L))
     .withStopTimeout(java.time.Duration.ofHours(1))
-    //.withProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
+    .withProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
   //.withStopTimeout(java.time.Duration.ofSeconds(1000L))
 
   val committerSettings = CommitterSettings(system).withDelivery(CommitDelivery.waitForAck)
@@ -93,109 +93,54 @@ class RangeTaskWorker(val id: String) {
 
     logger.info(s"\n${Console.MAGENTA_B}range task for ${task.id}${Console.RESET}\n")
 
-    /*val cmds = task.commands.map { c =>
-      Commands.Insert(task.id, c.list.map(x => x.key.toByteArray -> x.value.toByteArray), true)
-    }*/
+    for {
+      (maxRangeK, metaCR) <- ClusterIndex.fromRange(task.id, TestHelper.NUM_LEAF_ENTRIES,
+        TestHelper.NUM_META_ENTRIES)
 
-    val rangeIndexCtx = Await.result(storage.loadIndex(task.id), Duration.Inf).get
+      rangeCmds = task.commands.map { c =>
+        c.list.map { case kp =>
+          kp.key.toByteArray -> kp.value.toByteArray
+        }
+      }.flatten.sortBy(_._1)
 
-    val rangeIndex = new QueryableIndex[K, V](rangeIndexCtx)
+      n <- metaCR.insert(rangeCmds)
+      ok <- metaCR.saveIndexes(false)
+      metaAfter <- TestHelper.all(metaCR.meta.inOrder())
 
-    val rangeList = Await.result(TestHelper.all(rangeIndex.inOrder()), Duration.Inf)
-      .map{case (k, v, _) => k -> v}
+      maxRangeKAfter = metaAfter.head._1
+      //val rangeCtxAfter = metaAfter.head._2
 
-    val metaRange = new QueryableIndex[K, KeyIndexContext](IndexContext()
-      .withId(UUID.randomUUID.toString)
-      .withMaxNItems(Int.MaxValue)
-      .withLevels(0)
-      .withNumLeafItems(rangeIndexCtx.numLeafItems)
-      .withNumMetaItems(rangeIndexCtx.numMetaItems))
+      firstChanged = !ord.equiv(maxRangeK, maxRangeKAfter)
+      newRanges = metaAfter.length > 1
 
-    val beforeInsertList = Await.result(TestHelper.all(rangeIndex.inOrder()), Duration.Inf).map{x => new String(x._1)}
+      result <- if (firstChanged || newRanges) {
+        var metaTask = MetaTask("meta")
 
-    val maxRangeK = Await.result(rangeIndex.last(), Duration.Inf).get.max().get._1
+        metaTask = metaTask
+          .withRemoveRanges(Seq(ByteString.copyFrom(maxRangeK)))
+          .withInsertRanges(metaAfter.map { case (k, c, _) =>
+            KeyIndexContext(ByteString.copyFrom(k), c.ctxId)
+          })
 
-    Await.result(metaRange.insert(Seq(
-      maxRangeK -> KeyIndexContext(ByteString.copyFrom(maxRangeK), rangeIndexCtx.id)
-    )), Duration.Inf)
+        println(s"${Console.RED_B}SENDING META TASK ${task.id}${Console.RESET}")
 
-    val clusterRangeCtx = metaRange.ctx.snapshot(false)
+        sendTasks(Seq(metaTask))
+      } else {
 
-    val metaCR = new ClusterIndex[K, V](clusterRangeCtx, 256,
-      clusterRangeCtx.numLeafItems, clusterRangeCtx.numMetaItems)
+        val idx = metaCR.indexes.find { case (k, _) => task.id != k }.get._2
+        val nctx = idx.snapshot().withId(task.id)
 
-    metaCR.indexes.put(rangeIndex.ctx.indexId, rangeIndex)
+        idx.ctx = Context.fromIndexContext(nctx)
 
-    val rangeCmds = task.commands.map { c =>
-      c.list.map { case kp =>
-        kp.key.toByteArray -> kp.value.toByteArray
+        idx.save(true).map { _ =>
+          println(s"${Console.GREEN_B}NORMAL INSERTION on ${task.id}${Console.RESET}")
+          true
+        }
+
       }
-    }.flatten.sortBy(_._1)
 
-    Await.result(metaCR.insert(rangeCmds).flatMap(_ => metaCR.saveIndexes(false)), Duration.Inf)
-
-    val rangeListAfterInsertion = (rangeList ++ rangeCmds).sortBy(_._1).toList
-    val indexAfterInsertion = metaCR.inOrder().map { case (k, v, _) => k -> v }.toList
-
-    println(s"rangeListAfterInsertion ${task.id} ${rangeListAfterInsertion.map{case (k, v) => new String(k)}}")
-    println(s"indexAfterInsertion     ${task.id}   ${indexAfterInsertion.map{case (k, v) => new String(k)}}")
-
-    assert(Helper.isColEqual(rangeListAfterInsertion, indexAfterInsertion), "not equal!")
-
-    val indexAfterInsertionFromSaved = metaCR.inOrderFromSaved().map{case (k, v, _) => k -> v}.toList
-
-    println(s"rangeListAfterInsertion      ${task.id}  ${rangeListAfterInsertion.map { case (k, v) => new String(k) }}")
-    println(s"indexAfterInsertionFromSaved ${task.id}  ${indexAfterInsertionFromSaved.map { case (k, v) => new String(k) }}")
-
-    assert(Helper.isColEqual(rangeListAfterInsertion, indexAfterInsertionFromSaved))
-
-    val metaAfter = Await.result(TestHelper.all(metaCR.meta.inOrder()), Duration.Inf)
-
-    val maxRangeKAfter = metaAfter.head._1
-    val rangeCtxAfter = metaAfter.head._2
-
-    val firstChanged = !ord.equiv(maxRangeK, maxRangeKAfter)
-    val newRanges = metaAfter.length > 1
-
-    val metaCtx = Await.result(storage.loadIndex("meta"), Duration.Inf)
-    val m = new QueryableIndex[K, V](metaCtx.get)
-    val metaKeys = Await.result(TestHelper.all(m.inOrder()), Duration.Inf).map { x => new String(x._1) }
-
-    if(firstChanged || newRanges){
-
-      var metaTask = MetaTask("meta")
-
-      metaTask = metaTask
-        .withRemoveRanges(Seq(ByteString.copyFrom(maxRangeK)))
-        .withInsertRanges(metaAfter.map { case (k, c, _) =>
-          KeyIndexContext(ByteString.copyFrom(k), c.ctxId)
-        })
-
-      println(s"${Console.RED_B}SENDING META TASK ${task.id}${Console.RESET}")
-
-      return sendTasks(Seq(metaTask))
-    }
-
-    //normal insertion in range (todo)
-
-    println("normal insertion...")
-
-    val idx = metaCR.indexes.find {case (k, _) => task.id != k}.get._2
-    val nctx = idx.snapshot().withId(task.id)
-
-    storage.save(nctx, idx.ctx.getBlocks()
-      .map { case (id, block) => id -> idx.serializer.serialize(block) }).map { r =>
-      idx.ctx.clear()
-      true
-    }.map { _ =>
-      println(s"${Console.GREEN_B}NORMAL INSERTION on ${task.id}${Console.RESET}")
-
-      val ctx = Await.result(storage.loadIndex(task.id), Duration.Inf).get
-      val index = new QueryableIndex[K, V](ctx)
-
-      val data = Await.result(TestHelper.all(index.inOrder()), Duration.Inf).map{case (k, v, _) => new String(k)}
-
-      true
+    } yield {
+      result
     }
   }
 
@@ -209,13 +154,13 @@ class RangeTaskWorker(val id: String) {
   val control = {
     Consumer
       .committableSource(consumerSettings, Subscriptions.topics("range-index-tasks"))
-      /*.mapAsync(1) { msg =>
+      .mapAsync(1) { msg =>
         handler(msg).map(_ => msg.committableOffset)
-      }*/
-      .map { msg =>
+      }
+      /*.map { msg =>
         Await.result(handler(msg), Duration.Inf)
         msg.committableOffset
-      }
+      }*/
       //.log("debugging")
       .via(Committer.flow(committerSettings.withMaxBatch(1)))
       /*.toMat(Sink.ignore)(DrainingControl.apply)
