@@ -1,5 +1,0 @@
-[0m[[0m[0mdebug[0m] [0m[0mInvalidating cache (input changed)[0m
-[0m[[0m[0minfo[0m] [0m[0mCompiling 2 protobuf files to /Users/lucasrpb/Downloads/cluster-index/target/scala-2.13/akka-grpc/main[0m
-[0m[[0m[0mdebug[0m] [0m[0mprotoc options:[0m
-[0m[[0m[0mdebug[0m] [0m[0mCompiling schema /Users/lucasrpb/Downloads/cluster-index/src/main/protobuf/cluster.proto[0m
-[0m[[0m[0mdebug[0m] [0m[0mCompiling schema /Users/lucasrpb/Downloads/cluster-index/src/main/protobuf/tests.proto[0m

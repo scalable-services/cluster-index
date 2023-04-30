@@ -1,21 +1,22 @@
 package cluster
 
-import cluster.grpc.{KeyIndexContext, RangeTask}
+import cluster.Printers._
+import cluster.grpc.RangeTask
 import com.google.common.base.Charsets
 import com.google.protobuf.ByteString
-import com.google.protobuf.any.Any
-import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
-import services.scalable.index.grpc._
-import services.scalable.index.impl._
-import services.scalable.index.{Bytes, Commands, Context, IdGenerator, Meta, QueryableIndex, Serializer}
+import services.scalable.index.grpc.{IndexContext, InsertCommand, KVPair}
+import services.scalable.index.impl.{CassandraStorage, DefaultCache}
+import services.scalable.index.{Bytes, Commands, Context, IdGenerator}
 
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicInteger
-import scala.collection.concurrent.TrieMap
-import scala.concurrent.{Await, Future}
+import java.util.concurrent.ThreadLocalRandom
+import scala.concurrent.Await
 import scala.concurrent.duration.Duration
+import services.scalable.index.DefaultSerializers._
+import services.scalable.index.DefaultPrinters._
+import ClusterSerializers._
 
 object Main {
 
@@ -31,11 +32,7 @@ object Main {
 
     import services.scalable.index.DefaultComparators._
 
-    val indexId = "meta" //UUID.randomUUID().toString
-    val KEYSPACE = "history"
-
-    import services.scalable.index.DefaultSerializers._
-    import cluster.ClusterSerializers._
+    val indexId = TestConfig.CLUSTER_INDEX_NAME //UUID.randomUUID().toString
 
     implicit val idGenerator = new IdGenerator {
       override def generateId[K, V](ctx: Context[K, V]): String = UUID.randomUUID.toString
@@ -44,7 +41,7 @@ object Main {
 
     implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
     //implicit val storage = new MemoryStorage()
-    implicit val storage = new CassandraStorage(KEYSPACE, false)
+    implicit val storage = new CassandraStorage(TestConfig.session, false)
 
     val metaContext = Await.result(TestHelper.loadOrCreateIndex(IndexContext(
       indexId,
@@ -52,21 +49,21 @@ object Main {
       TestHelper.NUM_META_ENTRIES
     ).withMaxNItems(Int.MaxValue)), Duration.Inf).get
 
-    var data = Seq.empty[(K, V)]
+    var data = Seq.empty[(K, V, Boolean)]
     //val meta = new QueryableIndex[K, V](metaContext)
 
-    def insert(start: Int, end: Int): Seq[Tuple2[K, V]] = {
+    def insert(start: Int, end: Int): Seq[Tuple3[K, V, Boolean]] = {
        //rand.nextInt(1, 100)
-      var list = Seq.empty[Tuple2[K, V]]
+      var list = Seq.empty[Tuple3[K, V, Boolean]]
 
       for (i <- start until end) {
         val k = //i.toString.getBytes(Charsets.UTF_8)
           RandomStringUtils.randomAlphanumeric(5, 10).getBytes(Charsets.UTF_8)
         val v = RandomStringUtils.randomAlphanumeric(5).getBytes(Charsets.UTF_8)
 
-        if (!data.exists { case (k1, _) => ord.equiv(k, k1) } &&
-          !list.exists { case (k1, _) => ord.equiv(k, k1) }) {
-          list = list :+ (k -> v)
+        if (!data.exists { case (k1, _, _) => ord.equiv(k, k1) } &&
+          !list.exists { case (k1, _, _) => ord.equiv(k, k1) }) {
+          list = list :+ (k, v, true)
         }
       }
 
@@ -92,23 +89,23 @@ object Main {
 
     val savedMetaContext = Await.result(cindex.insert(list).flatMap(_ => cindex.save(false)), Duration.Inf)
 
-    val elements = cindex.inOrder().map { case (k, v, _) => k -> v }.toList
+    val elements = cindex.inOrder().toList
 
-    logger.info(s"${Console.YELLOW_B}list data:     ${list.toList.map { case (k, v) => new String(k, Charsets.UTF_8) }}${Console.RESET}\n")
-    logger.info(s"${Console.YELLOW_B}elements data: ${elements.map { case (k, v) => new String(k, Charsets.UTF_8) }}${Console.RESET}\n")
+    logger.info(s"${Console.YELLOW_B}list data:     ${list.toList.map { case (k, v, _) => new String(k, Charsets.UTF_8) }}${Console.RESET}\n")
+    logger.info(s"${Console.YELLOW_B}elements data: ${elements.map { case (k, v, _) => new String(k, Charsets.UTF_8) }}${Console.RESET}\n")
 
-    assert(TestHelper.isColEqual(list, elements))
+    assert(TestHelper.isColEqual(list.map{case (k, v, _) => (k, v, savedMetaContext.id)}, elements))
 
     val list2 = insert(0, 2222).sortBy(_._1)
 
     val listAll = (list ++ list2).sortBy(_._1)
 
-    println(s"${Console.YELLOW_B}listindex before range cmds inserted: ${Helper.insertListIndex(s"before-$indexId", list.sortBy(_._1), storage.session)}${Console.RESET}")
-    println(s"${Console.YELLOW_B}listindex inserted: ${Helper.insertListIndex(indexId, listAll, storage.session)}${Console.RESET}")
+    println(s"${Console.YELLOW_B}listindex before range cmds inserted: ${Helper.saveListIndex(s"before-$indexId", list.sortBy(_._1), storage.session)}${Console.RESET}")
+    println(s"${Console.YELLOW_B}listindex inserted: ${Helper.saveListIndex(s"after-${indexId}", listAll, storage.session)}${Console.RESET}")
 
     val clusterc = new ClusterClient[K, V](savedMetaContext)
 
-    val ranges = Await.result(clusterc.execute(Seq(Commands.Insert[K, V](indexId, list2, true))), Duration.Inf)
+    val ranges = Await.result(clusterc.execute(Seq(Commands.Insert[K, V](indexId, list2))), Duration.Inf)
 
     ranges.foreach { case (id, cmds) =>
       val icmds = cmds.asInstanceOf[Seq[Commands.Insert[K, V]]]
@@ -120,7 +117,7 @@ object Main {
       logger.info(s"${Console.YELLOW_B}range task: ${rid}${Console.RESET}")
 
       RangeTask(rid, cmds.map { c =>
-        InsertCommand(c.asInstanceOf[Commands.Insert[K, V]].list.map { case (k, v) =>
+        InsertCommand(c.asInstanceOf[Commands.Insert[K, V]].list.map { case (k, v, _) =>
           KVPair(ByteString.copyFrom(k), ByteString.copyFrom(v))
         }, true)
       })

@@ -4,9 +4,11 @@ import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
-import services.scalable.index.{Bytes, Commands, Context, IdGenerator, QueryableIndex}
+import services.scalable.index.DefaultPrinters._
+import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc._
 import services.scalable.index.impl._
+import services.scalable.index.{Bytes, Commands, Context, IdGenerator, QueryableIndex}
 
 import java.util.UUID
 import scala.concurrent.Await
@@ -24,15 +26,12 @@ object InsertDemo {
     type K = Bytes
     type V = Bytes
 
+    val indexId = "meta"
+
     import services.scalable.index.DefaultComparators._
 
-    val NUM_LEAF_ENTRIES = 4 //rand.nextInt(5, 64)
-    val NUM_META_ENTRIES = 4 //rand.nextInt(5, 64)
-
-    val indexId = "index4" //UUID.randomUUID().toString
-    val KEYSPACE = "history"
-
-    import services.scalable.index.DefaultSerializers._
+    val NUM_LEAF_ENTRIES = 8 //rand.nextInt(5, 64)
+    val NUM_META_ENTRIES = 8 //rand.nextInt(5, 64)
 
     implicit val idGenerator = new IdGenerator {
       override def generateId[K, V](ctx: Context[K, V]): String = UUID.randomUUID.toString
@@ -41,28 +40,28 @@ object InsertDemo {
 
     implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
     //implicit val storage = new MemoryStorage()
-    implicit val storage = new CassandraStorage(KEYSPACE, false)
+    implicit val storage = new CassandraStorage(TestConfig.session, false)
 
     val indexContext = Await.result(TestHelper.loadOrCreateIndex(IndexContext(
-      indexId,
+      TestConfig.CLUSTER_INDEX_NAME,
       NUM_LEAF_ENTRIES,
       NUM_META_ENTRIES
     )), Duration.Inf).get
 
-    var data = Seq.empty[(K, V)]
+    var data = Seq.empty[(K, V, Boolean)]
     val index = new QueryableIndex[K, V](indexContext)
 
     def insert(): Unit = {
       val n = 100 //rand.nextInt(1, 100)
-      var list = Seq.empty[Tuple2[K, V]]
+      var list = Seq.empty[Tuple3[K, V, Boolean]]
 
       for (i <- 0 until n) {
         val k = RandomStringUtils.randomAlphanumeric(5, 10).getBytes(Charsets.UTF_8)
         val v = RandomStringUtils.randomAlphanumeric(5).getBytes(Charsets.UTF_8)
 
-        if (!data.exists { case (k1, _) => ord.equiv(k, k1) } &&
-          !list.exists { case (k1, _) => ord.equiv(k, k1) }) {
-          list = list :+ (k -> v)
+        if (!data.exists { case (k1, _, _) => ord.equiv(k, k1) } &&
+          !list.exists { case (k1, _, _) => ord.equiv(k, k1) }) {
+          list = list :+ (k, v, true)
         }
       }
 
@@ -73,22 +72,20 @@ object InsertDemo {
 
       //index.snapshot()
 
-      assert(result)
+      assert(result.success)
 
-      if (result) {
-        data = data ++ list
-      }
+      data = data ++ list
     }
 
     insert()
 
     logger.info(Await.result(index.save(), Duration.Inf).toString)
 
-    val dlist = data.sortBy(_._1)
-    val ilist = Await.result(TestHelper.all(index.inOrder()), Duration.Inf).map { case (k, v, _) => k -> v }
+    val dlist = data.sortBy(_._1).map{case (k, v, _) => Tuple3(k, v, indexContext.id)}
+    val ilist = Await.result(TestHelper.all(index.inOrder()), Duration.Inf)
 
-    logger.debug(s"${Console.GREEN_B}tdata: ${dlist.map { case (k, v) => new String(k, Charsets.UTF_8) -> new String(v) }}${Console.RESET}\n")
-    logger.debug(s"${Console.MAGENTA_B}idata: ${ilist.map { case (k, v) => new String(k, Charsets.UTF_8) -> new String(v) }}${Console.RESET}\n")
+    logger.debug(s"${Console.GREEN_B}tdata: ${dlist.map { case (k, v, _) => new String(k, Charsets.UTF_8) -> new String(v) }}${Console.RESET}\n")
+    logger.debug(s"${Console.MAGENTA_B}idata: ${ilist.map { case (k, v, _) => new String(k, Charsets.UTF_8) -> new String(v) }}${Console.RESET}\n")
 
     assert(TestHelper.isColEqual(dlist, ilist))
 

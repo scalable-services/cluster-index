@@ -13,8 +13,8 @@ import scala.jdk.CollectionConverters.CollectionHasAsScala
 
 object Helper {
 
-  def insertListIndex(id: String, data: Seq[(Bytes, Bytes)], session: CqlSession): Boolean = {
-    val listIndex = ListIndex(id, data.map { case (k, _) =>
+  def saveListIndex(id: String, data: Seq[(Bytes, Bytes, Boolean)], session: CqlSession): Boolean = {
+    val listIndex = ListIndex(id, data.map { case (k, _, _) =>
       ByteString.copyFrom(k)
     })
 

@@ -2,13 +2,15 @@ package cluster
 
 import cluster.grpc.KeyIndexContext
 import com.google.protobuf.ByteString
-import services.scalable.index.{AsyncIterator, Block, Bytes, Cache, Commands, Context, Errors, IdGenerator, QueryableIndex, Serializer, Storage, Tuple}
 import services.scalable.index.grpc.{IndexContext, RootRef}
+import services.scalable.index.{AsyncIterator, Block, Bytes, Cache, Errors, IdGenerator, InsertionResult, QueryableIndex, Serializer, Storage, Tuple}
 
 import java.util.UUID
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import services.scalable.index.DefaultPrinters._
+import Printers._
 
 class ClusterIndex[K, V](val metaContext: IndexContext,
                          val maxNItems: Int,
@@ -20,6 +22,9 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
                           val dbCtxSerializer: Serializer[Block[K, KeyIndexContext]],
                           val cache: Cache,
                           val ord: Ordering[K],
+                          val ks: K => String,
+                          val vs: V => String,
+                          val kics: KeyIndexContext => String,
                           val idGenerator: IdGenerator) {
   val meta = new QueryableIndex[K, KeyIndexContext](metaContext)
 
@@ -69,17 +74,16 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     }
   }
 
-  def insertMeta(left: QueryableIndex[K, V]): Future[Int] = {
-
+  def insertMeta(left: QueryableIndex[K, V]): Future[InsertionResult] = {
     println(s"insert indexes in meta[1]: left ${left.ctx.indexId}")
 
     left.max().flatMap { lm =>
-      meta.insert(Seq(lm.get._1 -> KeyIndexContext(ByteString.copyFrom(lm.get._1.asInstanceOf[Bytes]),
-        left.ctx.indexId)))
+      meta.insert(Seq(Tuple3(lm.get._1, KeyIndexContext(ByteString.copyFrom(lm.get._1.asInstanceOf[Bytes]),
+        left.ctx.indexId), true)))
     }
   }
 
-  def insertMeta(left: QueryableIndex[K, V], right: QueryableIndex[K, V], last: K): Future[Int] = {
+  def insertMeta(left: QueryableIndex[K, V], right: QueryableIndex[K, V], last: K): Future[InsertionResult] = {
 
     Future.sequence(Seq(left.max(), right.max())).flatMap { maxes =>
       val lm = maxes(0).get._1
@@ -87,18 +91,18 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
 
       println(s"inserting indexes in meta[2]: left ${left.ctx.indexId} right: ${right.ctx.indexId}")
 
-      meta.remove(Seq(last)).flatMap { ok =>
+      meta.remove(Seq(Tuple2(last, None))).flatMap { ok =>
         meta.insert(Seq(
-          lm -> KeyIndexContext(ByteString.copyFrom(lm.asInstanceOf[Bytes]),
-            left.ctx.indexId),
-          rm -> KeyIndexContext(ByteString.copyFrom(rm.asInstanceOf[Bytes]),
-            right.ctx.indexId)
+          Tuple3(lm, KeyIndexContext(ByteString.copyFrom(lm.asInstanceOf[Bytes]),
+            left.ctx.indexId), true),
+          Tuple3(rm, KeyIndexContext(ByteString.copyFrom(rm.asInstanceOf[Bytes]),
+            right.ctx.indexId), true)
         ))
       }
     }
   }
 
-  def insertEmpty(data: Seq[Tuple2[K, V]]): Future[Int] = {
+  def insertEmpty(data: Seq[Tuple3[K, V, Boolean]]): Future[Int] = {
     val leftN = Math.min(maxNItems, data.length)
     val slice = data.slice(0, leftN)
 
@@ -183,7 +187,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       index.c.maxNItems)
 
     val copy = new QueryableIndex[K, V](context)(ec,
-      index.storage, index.serializer, index.cache, index.ord, index.idGenerator)
+      index.storage, index.serializer, index.cache, index.ord, index.idGenerator, ks, vs)
 
     index.ctx.blockReferences.foreach { case (id, _) =>
       copy.ctx.blockReferences += id -> id
@@ -192,7 +196,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     copy
   }
 
-  def insertRange(left: QueryableIndex[K, V], list: Seq[Tuple2[K, V]], last: K): Future[Int] = {
+  def insertRange(left: QueryableIndex[K, V], list: Seq[Tuple3[K, V, Boolean]], last: K): Future[Int] = {
 
     val lindex = left.copy()//copy(left)
 
@@ -260,21 +264,21 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       Future.sequence(Seq(lindex.max())).flatMap { maxes =>
         val lm = maxes(0).get._1
 
-        meta.remove(Seq(last)).flatMap { ok =>
+        meta.remove(Seq(Tuple2(last, None))).flatMap { ok =>
           meta.insert(Seq(
-            lm -> KeyIndexContext(ByteString.copyFrom(lm.asInstanceOf[Bytes]),
-              lindex.ctx.indexId)
+            Tuple3(lm, KeyIndexContext(ByteString.copyFrom(lm.asInstanceOf[Bytes]),
+              lindex.ctx.indexId), true)
           ))
         }
       }.map(_ => slice.length)
     }
   }
 
-  def insert(data: Seq[Tuple2[K, V]])(implicit ord: Ordering[K]): Future[Int] = {
+  def insert(data: Seq[Tuple3[K, V, Boolean]])(implicit ord: Ordering[K]): Future[Int] = {
     val sorted = data.sortBy(_._1)
 
-    if (sorted.exists { case (k, _) => sorted.count { case (k1, _) => ord.equiv(k, k1) } > 1 }) {
-      return Future.failed(Errors.DUPLICATE_KEYS(data))
+    if (sorted.exists { case (k, _, _) => sorted.count { case (k1, _, _) => ord.equiv(k, k1) } > 1 }) {
+      return Future.failed(Errors.DUPLICATED_KEYS(data.map(_._1), ks))
     }
 
     val len = sorted.length
@@ -284,7 +288,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       if (pos == len) return Future.successful(sorted.length)
 
       var list = sorted.slice(pos, len)
-      val (k, _) = list(0)
+      val (k, _, _) = list(0)
 
       findPath(k).flatMap {
         case None =>
@@ -304,7 +308,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
           //val x = Await.result(all(index.inOrder()), Duration.Inf).map{ x => new String(x._1.asInstanceOf[Bytes])}
           //println(s"insert existing", new String(last.asInstanceOf[Bytes]), "i ", x)
 
-          val idx = list.indexWhere { case (k, _) => ord.gt(k, last) }
+          val idx = list.indexWhere { case (k, _, _) => ord.gt(k, last) }
           if (idx > 0) list = list.slice(0, idx)
 
           insertRange(index, list, last)
@@ -318,12 +322,12 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     insert()
   }
 
-  def update(data: Seq[Tuple[K, V]])(implicit ord: Ordering[K]): Future[Int] = {
+  def update(data: Seq[Tuple3[K, V, Option[String]]])(implicit ord: Ordering[K]): Future[Int] = {
 
     val sorted = data.sortBy(_._1)
 
     if (sorted.exists { case (k, _, _) => sorted.count { case (k1, _, _) => ord.equiv(k, k1) } > 1 }) {
-      return Future.failed(Errors.DUPLICATE_KEYS(sorted))
+      return Future.failed(Errors.DUPLICATED_KEYS(sorted.map(_._1), ks))
     }
 
     val len = sorted.length
@@ -336,15 +340,15 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       val (k, _, _) = list(0)
 
       findPath(k).flatMap {
-        case None => Future.failed(Errors.KEY_NOT_FOUND(k))
+        case None => Future.failed(Errors.KEY_NOT_FOUND(k, ks))
         case Some((last, index)) =>
 
           val idx = list.indexWhere { case (k, _, _) => ord.gt(k, last) }
           if (idx > 0) list = list.slice(0, idx)
 
           index.update(list)
-      }.flatMap { n =>
-        pos += n
+      }.flatMap { res =>
+        pos += res.n
         update()
       }
     }
@@ -430,7 +434,7 @@ object ClusterIndex {
       maxRangeK <- rangeIndex.max().map(_.get).map(_._1)
 
       n <- metaRange.insert(Seq(
-        maxRangeK -> KeyIndexContext(ByteString.copyFrom(maxRangeK), rangeCtx.id)
+        Tuple3(maxRangeK, KeyIndexContext(ByteString.copyFrom(maxRangeK), rangeCtx.id), true)
       ))
 
     } yield {

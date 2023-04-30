@@ -5,14 +5,13 @@ import akka.kafka.ConsumerMessage.CommittableMessage
 import akka.kafka.scaladsl.{Committer, Consumer}
 import akka.kafka.{CommitDelivery, CommitterSettings, ConsumerSettings, Subscriptions}
 import akka.stream.scaladsl.Sink
+import cluster.ClusterSerializers._
 import cluster.grpc.{KeyIndexContext, MetaTask}
-import com.google.common.base.Charsets
 import com.google.protobuf.any.Any
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.common.serialization.{ByteArrayDeserializer, StringDeserializer}
 import org.slf4j.LoggerFactory
 import services.scalable.index.DefaultComparators._
-import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
 import services.scalable.index.{AsyncIterator, Bytes, Commands, Context, IdGenerator, QueryableIndex, Serializer, Tuple}
@@ -20,7 +19,8 @@ import services.scalable.index.{AsyncIterator, Bytes, Commands, Context, IdGener
 import java.util.UUID
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
-import cluster.ClusterSerializers._
+import services.scalable.index.DefaultPrinters._
+import Printers._
 
 class MetaTaskWorker {
 
@@ -55,7 +55,7 @@ class MetaTaskWorker {
 
   implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
   //implicit val storage = new MemoryStorage(NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
-  implicit val storage = new CassandraStorage("history", false)
+  implicit val storage = new CassandraStorage(TestConfig.session, false)
 
   implicit val metaIndexSerializer = new Serializer[IndexContext] {
     override def serialize(t: IndexContext): Bytes = Any.pack(t).toByteArray
@@ -81,14 +81,14 @@ class MetaTaskWorker {
     logger.info(s"\n${Console.MAGENTA_B}meta task: ${task.id}${Console.RESET}\n")
 
     val removeList = task.removeRanges.map { k =>
-      k.toByteArray
+      Tuple2(k.toByteArray, None)
     }
 
     val insertList = task.insertRanges.map { tuple =>
-      tuple.key.toByteArray -> KeyIndexContext(tuple.key, tuple.ctxId)
+      Tuple3(tuple.key.toByteArray, KeyIndexContext(tuple.key, tuple.ctxId), true)
     }
 
-    val ctx = Await.result(storage.loadIndex("meta"), Duration.Inf).get
+    val ctx = Await.result(storage.loadIndex(TestConfig.CLUSTER_INDEX_NAME), Duration.Inf).get
     val meta = new QueryableIndex[K, KeyIndexContext](ctx)
 
     val metaList = Await.result(TestHelper.all(meta.inOrder()), Duration.Inf).map{case (k, ctx, _) => new String(k)}
@@ -102,7 +102,7 @@ class MetaTaskWorker {
     for {
       _ <- if(!removeList.isEmpty) meta.execute(Seq(Commands.Remove(ctx.id, removeList))) else
         Future.successful(true)
-      _ <- meta.execute(Seq(Commands.Insert(ctx.id, insertList, true)), UUID.randomUUID.toString)
+      _ <- meta.execute(Seq(Commands.Insert(ctx.id, insertList)), UUID.randomUUID.toString)
       _ <- meta.save(true)
     } yield {
       logger.info(s"\n${Console.GREEN_B}FINISHED!${Console.RESET}\n")
@@ -112,7 +112,7 @@ class MetaTaskWorker {
 
   val control = {
     Consumer
-      .committableSource(consumerSettings, Subscriptions.topics("meta-index-tasks"))
+      .committableSource(consumerSettings, Subscriptions.topics(TestConfig.META_INDEX_TOPIC))
       .mapAsync(1) { msg =>
         handler(msg).map(_ => msg.committableOffset)
       }

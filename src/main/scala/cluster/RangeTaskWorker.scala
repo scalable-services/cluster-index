@@ -1,46 +1,75 @@
 package cluster
 
-import akka.actor.ActorSystem
-import akka.kafka.ConsumerMessage.CommittableMessage
-import akka.kafka.scaladsl.{Committer, Consumer, Producer}
-import akka.kafka.{CommitDelivery, CommitterSettings, ConsumerSettings, ProducerSettings, Subscriptions}
-import akka.stream.scaladsl.{Sink, Source}
+import cluster.ClusterSerializers._
 import cluster.grpc.{ClusterIndexCommand, KeyIndexContext, MetaTask, RangeTask}
+import com.datastax.oss.driver.api.core.CqlSession
 import com.google.protobuf.ByteString
 import com.google.protobuf.any.Any
+import io.vertx.core.Vertx
+import io.vertx.kafka.client.consumer.{KafkaConsumer, KafkaConsumerRecords}
+import io.vertx.kafka.client.producer.{KafkaProducer, KafkaProducerRecord}
 import org.apache.kafka.clients.consumer.ConsumerConfig
-import org.apache.kafka.clients.producer.ProducerRecord
-import org.apache.kafka.common.serialization.{ByteArrayDeserializer, ByteArraySerializer, StringDeserializer, StringSerializer}
 import org.slf4j.LoggerFactory
+import services.scalable.index.DefaultComparators._
+import services.scalable.index.DefaultPrinters._
+import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{AsyncIterator, Bytes, Commands, Context, IdGenerator, QueryableIndex, Serializer, Tuple}
+import services.scalable.index.{Bytes, Context, IdGenerator, Serializer}
 
+import java.util
 import java.util.UUID
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext, Future}
-import services.scalable.index.DefaultSerializers._
-import services.scalable.index.DefaultComparators._
-import cluster.ClusterSerializers._
+import scala.concurrent.{Await, Future}
+import scala.jdk.CollectionConverters.IteratorHasAsScala
+import scala.jdk.FutureConverters._
 
 class RangeTaskWorker(val id: String) {
 
   val logger = LoggerFactory.getLogger(this.getClass)
 
-  implicit val system = ActorSystem.create()
-  implicit val ec = system.dispatcher
+  val vertx = Vertx.vertx()
+  val consumerSettings = new util.HashMap[String, String]()
 
-  val consumerSettings = ConsumerSettings[String, Array[Byte]](system, new StringDeserializer, new ByteArrayDeserializer)
-    .withBootstrapServers("localhost:9092")
-    .withGroupId(s"range-task-workers")
-    .withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest")
-    .withClientId(s"range-task-worker-${id}")
-    .withPollInterval(java.time.Duration.ofMillis(10L))
-    .withStopTimeout(java.time.Duration.ofHours(1))
-    .withProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
-  //.withStopTimeout(java.time.Duration.ofSeconds(1000L))
+  consumerSettings.put("bootstrap.servers", "localhost:9092")
+  consumerSettings.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer")
+  consumerSettings.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer")
+  consumerSettings.put("group.id", s"range-task-workers")
+  consumerSettings.put("auto.offset.reset", "earliest")
+  consumerSettings.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
+  consumerSettings.put("enable.auto.commit", "false")
 
-  val committerSettings = CommitterSettings(system).withDelivery(CommitDelivery.waitForAck)
+  val consumer = KafkaConsumer.create[String, Array[Byte]](vertx, consumerSettings)
+
+  val producerSettings = new util.HashMap [String, String] ()
+  producerSettings.put("bootstrap.servers", "localhost:9092")
+  producerSettings.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer")
+  producerSettings.put("value.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer")
+  producerSettings.put("acks", "1")
+
+  val producer = KafkaProducer.create[String, Array[Byte]](vertx, producerSettings)
+
+  def handler(records: KafkaConsumerRecords[String, Array[Byte]]): Unit = {
+    val msgs = records.records().iterator().asScala.toSeq.map { msg =>
+      Any.parseFrom(msg.value()).unpack(RangeTask)
+    }
+
+    // Abort changed reads before doing writes
+    //TODO: implement if not exists for inserts as well...
+    /*val groupedOps = msgs.groupBy { m =>
+
+    }*/
+
+    msgs.foreach { rt =>
+      Await.result(insertRange(rt), Duration.Inf)
+    }
+
+    consumer.commit().result()
+  }
+
+  consumer.handler(_ => {})
+  consumer.batchHandler(handler)
+  consumer.subscribe(TestConfig.RANGE_INDEX_TOPIC).result()
 
   type K = Bytes
   type V = Bytes
@@ -50,43 +79,33 @@ class RangeTaskWorker(val id: String) {
     override def generatePartition[K, V](ctx: Context[K, V]): String = "p0"
   }
 
+  import scala.concurrent.ExecutionContext.Implicits.global
+
   implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
   //implicit val storage = new MemoryStorage(NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
-  implicit val storage = new CassandraStorage("history", false)
+  implicit val storage = new CassandraStorage(TestConfig.session, false)
 
   implicit val metaIndexSerializer = new Serializer[IndexContext] {
     override def serialize(t: IndexContext): Bytes = Any.pack(t).toByteArray
-
     override def deserialize(b: Bytes): IndexContext = Any.parseFrom(b).unpack(IndexContext)
   }
 
-  def all[K, V](it: AsyncIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
-    it.hasNext().flatMap {
-      case true => it.next().flatMap { list =>
-        all(it).map {
-          list ++ _
-        }
-      }
-      case false => Future.successful(Seq.empty[Tuple[K, V]])
-    }
-  }
-
-  val producerSettings = ProducerSettings[String, Bytes](system, new StringSerializer, new ByteArraySerializer)
-    .withBootstrapServers("localhost:9092")
-
-  val kafkaProducer = producerSettings.createKafkaProducer()
-  val settingsWithProducer = producerSettings.withProducer(kafkaProducer)
-
   def sendTasks(tasks: Seq[ClusterIndexCommand]): Future[Boolean] = {
     val records = tasks.map {
-      case t: MetaTask => new ProducerRecord[String, Bytes]("meta-index-tasks",
-        t.id, Any.pack(t).toByteArray)
-      case t: RangeTask => new ProducerRecord[String, Bytes]("range-index-tasks",
-        t.id, Any.pack(t).toByteArray)
+      case t: MetaTask =>
+        KafkaProducerRecord.create[String, Array[Byte]](TestConfig.META_INDEX_TOPIC, Any.pack(t).toByteArray)
+
+      case t: RangeTask =>
+        KafkaProducerRecord.create[String, Array[Byte]](TestConfig.RANGE_INDEX_TOPIC, Any.pack(t).toByteArray)
     }
 
-    Source(records)
-      .runWith(Producer.plainSink(settingsWithProducer)).map(_ => true)
+    producer.setWriteQueueMaxSize(records.length)
+
+    records.foreach { msg =>
+      producer.send(msg)
+    }
+
+    producer.flush().toCompletionStage.asScala.map(_ => true)
   }
 
   def insertRange(task: RangeTask): Future[Boolean] = {
@@ -99,7 +118,7 @@ class RangeTaskWorker(val id: String) {
 
       rangeCmds = task.commands.map { c =>
         c.list.map { case kp =>
-          kp.key.toByteArray -> kp.value.toByteArray
+          Tuple3(kp.key.toByteArray, kp.value.toByteArray, true)
         }
       }.flatten.sortBy(_._1)
 
@@ -130,7 +149,7 @@ class RangeTaskWorker(val id: String) {
         val idx = metaCR.indexes.find { case (k, _) => task.id != k }.get._2
         val nctx = idx.snapshot().withId(task.id)
 
-        idx.ctx = Context.fromIndexContext(nctx)
+        idx.ctx = Context.fromIndexContext[Bytes, Bytes](nctx)
 
         idx.save(true).map { _ =>
           println(s"${Console.GREEN_B}NORMAL INSERTION on ${task.id}${Console.RESET}")
@@ -143,36 +162,5 @@ class RangeTaskWorker(val id: String) {
       result
     }
   }
-
-  def handler(msg: CommittableMessage[String, Array[Byte]]): Future[Boolean] = {
-    val rec = msg.record
-    val task = Any.parseFrom(rec.value()).unpack(RangeTask)
-
-    insertRange(task)
-  }
-
-  val control = {
-    Consumer
-      .committableSource(consumerSettings, Subscriptions.topics("range-index-tasks"))
-      .mapAsync(1) { msg =>
-        handler(msg).map(_ => msg.committableOffset)
-      }
-      /*.map { msg =>
-        Await.result(handler(msg), Duration.Inf)
-        msg.committableOffset
-      }*/
-      //.log("debugging")
-      .via(Committer.flow(committerSettings.withMaxBatch(1)))
-      /*.toMat(Sink.ignore)(DrainingControl.apply)
-      .run().streamCompletion*/
-      .runWith(Sink.ignore)
-      .recover {
-        case e: RuntimeException => e.printStackTrace()
-      }
-  }
-
-  Await.result(system.whenTerminated.map { _ =>
-    storage.close()
-  }, Duration.Inf)
 
 }

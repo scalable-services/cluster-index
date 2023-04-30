@@ -16,4 +16,8 @@ package object cluster {
     implicit val grpcStringKeyIndexContextSerializer = new GrpcByteSerializer[Bytes, KeyIndexContext]()
   }
 
+  object Printers {
+    implicit def keyIndexContextToStringPrinter(k: KeyIndexContext): String = k.toString
+  }
+
 }

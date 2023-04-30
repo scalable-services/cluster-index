@@ -7,11 +7,12 @@ import services.scalable.index.grpc.{IndexContext, TemporalContext}
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import services.scalable.index.DefaultPrinters._
 
 object TestHelper {
 
-  val NUM_LEAF_ENTRIES = 4 //rand.nextInt(5, 64)
-  val NUM_META_ENTRIES = 4 //rand.nextInt(5, 64)
+  val NUM_LEAF_ENTRIES = 8 //rand.nextInt(5, 64)
+  val NUM_META_ENTRIES = 8 //rand.nextInt(5, 64)
   val MAX_ITEMS = 1024
 
   def loadIndexInOrder(id: String)(implicit ec: ExecutionContext,
@@ -72,11 +73,11 @@ object TestHelper {
     }
   }
 
-  def isColEqual[K, V](source: Seq[Tuple2[K, V]], target: Seq[Tuple2[K, V]])(implicit ordk: Ordering[K], ordv: Ordering[V]): Boolean = {
+  def isColEqual[K, V](source: Seq[Tuple3[K, V, String]], target: Seq[Tuple3[K, V, String]])(implicit ordk: Ordering[K], ordv: Ordering[V]): Boolean = {
     if(target.length != source.length) return false
     for(i<-0 until source.length){
-      val (ks, vs) = source(i)
-      val (kt, vt) = target(i)
+      val (ks, vs, _) = source(i)
+      val (kt, vt, _) = target(i)
 
       if(!(ordk.equiv(kt, ks) && ordv.equiv(vt, vs))){
         return false

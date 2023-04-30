@@ -14,12 +14,14 @@ import services.scalable.index.grpc.IndexContext
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
+import Printers._
 
 class ClusterClient[K, V](metaCtx: IndexContext)(implicit val ec: ExecutionContext,
                                             val storage: Storage,
                                             val rangeCtxSerializer: Serializer[Block[K, KeyIndexContext]],
                                             val cache: Cache,
                                             val ord: Ordering[K],
+                                            val kts: K => String,
                                             val idGenerator: IdGenerator){
 
   val system = ActorSystem.create()
@@ -67,7 +69,7 @@ class ClusterClient[K, V](metaCtx: IndexContext)(implicit val ec: ExecutionConte
       if (pos == len) return Future.successful(sorted.length)
 
       var list = sorted.slice(pos, len)
-      val (k, _) = list(0)
+      val (k, _, vs) = list(0)
 
       //println(s"key to find: ${new String(k.asInstanceOf[Bytes])}")
 
@@ -77,7 +79,7 @@ class ClusterClient[K, V](metaCtx: IndexContext)(implicit val ec: ExecutionConte
           list.length
         case Some((last, dbCtx, version)) =>
 
-          val idx = list.indexWhere { case (k, _) => ord.gt(k, last) }
+          val idx = list.indexWhere { case (k, _, _) => ord.gt(k, last) }
           if (idx > 0) list = list.slice(0, idx)
 
           //println(s"${Thread.currentThread().threadId()} seeking range for slice from ${pos}: ${list.map{x => new String(x._1.asInstanceOf[Bytes])}}")
@@ -113,13 +115,13 @@ class ClusterClient[K, V](metaCtx: IndexContext)(implicit val ec: ExecutionConte
       if (pos == len) return Future.successful(sorted.length)
 
       var list = sorted.slice(pos, len)
-      val k = list(0)
+      val (k, _) = list(0)
 
       findRange(k).map {
         case None => list.length
         case Some((last, leafId, version)) =>
 
-          val idx = list.indexWhere { k => ord.gt(k, last) }
+          val idx = list.indexWhere { case (k, vs) => ord.gt(k, last) }
           if (idx > 0) list = list.slice(0, idx)
 
           val c = Commands.Remove[K, V]("main", list)

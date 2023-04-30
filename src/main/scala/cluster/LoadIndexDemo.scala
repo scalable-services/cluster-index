@@ -1,24 +1,22 @@
 package cluster
 
-import com.google.common.base.Charsets
+import cluster.ClusterSerializers._
 import io.netty.util.internal.ThreadLocalRandom
-import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
-import services.scalable.index.grpc._
 import services.scalable.index.impl._
-import services.scalable.index.{Bytes, Commands, Context, IdGenerator, QueryableIndex}
+import services.scalable.index.{Bytes, Context, IdGenerator}
 
 import java.util.UUID
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
-import cluster.ClusterSerializers._
+import services.scalable.index.DefaultPrinters._
+import Printers._
 
 object LoadIndexDemo {
 
   val logger = LoggerFactory.getLogger(this.getClass)
 
-  val indexId = "meta" //UUID.randomUUID().toString
-  val KEYSPACE = "history"
+  val indexId = TestConfig.CLUSTER_INDEX_NAME //UUID.randomUUID().toString
 
   val rand = ThreadLocalRandom.current()
 
@@ -42,7 +40,7 @@ object LoadIndexDemo {
 
   implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
   //implicit val storage = new MemoryStorage()
-  implicit val storage = new CassandraStorage(KEYSPACE, false)
+  implicit val storage = new CassandraStorage(TestConfig.session, false)
 
   def loadAll(): List[String] = {
     val metaContext = Await.result(TestHelper.loadIndex(indexId), Duration.Inf).get
@@ -58,11 +56,11 @@ object LoadIndexDemo {
 
   def main(args: Array[String]): Unit = {
 
-    val indexIdBefore = s"before-${indexId}"
+    val indexIdBefore = s"after-$indexId"
 
     val ilist = loadAll()
 
-    val ldata = Helper.loadListIndex(indexId, storage.session).get.keys.map { k =>
+    val ldata = Helper.loadListIndex(indexIdBefore, storage.session).get.keys.map { k =>
       new String(k.toByteArray)
     }.toList
 
