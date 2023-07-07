@@ -3,14 +3,12 @@ package cluster
 import cluster.ClusterSerializers._
 import cluster.grpc._
 import com.google.common.base.Charsets
-import com.google.protobuf.ByteString
 import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
-import services.scalable.index.grpc.{IndexContext, KVPair}
+import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{Bytes, Commands, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder}
+import services.scalable.index.{Bytes, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IndexBuilder}
 
-import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
