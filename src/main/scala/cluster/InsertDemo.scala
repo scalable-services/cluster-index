@@ -8,7 +8,7 @@ import services.scalable.index.DefaultPrinters._
 import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc._
 import services.scalable.index.impl._
-import services.scalable.index.{Bytes, Commands, Context, DefaultComparators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, QueryableIndex}
+import services.scalable.index.{Bytes, Commands, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, QueryableIndex}
 
 import java.util.UUID
 import scala.concurrent.Await
@@ -33,10 +33,7 @@ object InsertDemo {
     val NUM_LEAF_ENTRIES = 8 //rand.nextInt(5, 64)
     val NUM_META_ENTRIES = 8 //rand.nextInt(5, 64)
 
-    implicit val idGenerator = new IdGenerator {
-      override def generateId[K, V](ctx: Context[K, V]): String = UUID.randomUUID.toString
-      override def generatePartition[K, V](ctx: Context[K, V]): String = "p0"
-    }
+    implicit val idGenerator = DefaultIdGenerators.idGenerator
 
     implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
     //implicit val storage = new MemoryStorage()

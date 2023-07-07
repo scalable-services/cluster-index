@@ -15,7 +15,7 @@ import services.scalable.index.DefaultPrinters._
 import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{Bytes, Context, DefaultComparators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, Serializer}
+import services.scalable.index.{Bytes, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, Serializer}
 
 import java.util
 import java.util.UUID
@@ -74,11 +74,7 @@ class RangeTaskWorker(val id: String) {
   type K = Bytes
   type V = Bytes
 
-  implicit val idGenerator = new IdGenerator {
-    override def generateId[K, V](ctx: Context[K, V]): String = UUID.randomUUID.toString
-    override def generatePartition[K, V](ctx: Context[K, V]): String = "p0"
-  }
-
+  implicit val idGenerator = DefaultIdGenerators.idGenerator
   import scala.concurrent.ExecutionContext.Implicits.global
 
   implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)

@@ -4,7 +4,7 @@ import cluster.ClusterSerializers._
 import io.netty.util.internal.ThreadLocalRandom
 import org.slf4j.LoggerFactory
 import services.scalable.index.impl._
-import services.scalable.index.{Bytes, Context, DefaultComparators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder}
+import services.scalable.index.{Bytes, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder}
 
 import java.util.UUID
 import scala.concurrent.Await
@@ -33,11 +33,7 @@ object LoadIndexDemo {
 
   import services.scalable.index.DefaultSerializers._
 
-  implicit val idGenerator = new IdGenerator {
-    override def generateId[K, V](ctx: Context[K, V]): String = UUID.randomUUID.toString
-
-    override def generatePartition[K, V](ctx: Context[K, V]): String = "p0"
-  }
+  implicit val idGenerator = DefaultIdGenerators.idGenerator
 
   implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
   //implicit val storage = new MemoryStorage()

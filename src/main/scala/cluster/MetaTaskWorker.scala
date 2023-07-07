@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory
 import services.scalable.index.DefaultComparators._
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{AsyncIndexIterator, Bytes, Commands, Context, DefaultComparators, DefaultPrinters, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Tuple}
+import services.scalable.index.{AsyncIndexIterator, Bytes, Commands, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Tuple}
 import cluster.ClusterSerializers._
 
 import java.util.UUID
@@ -45,11 +45,7 @@ class MetaTaskWorker {
   val NUM_LEAF_ENTRIES = 8
   val NUM_META_ENTRIES = 8
 
-  implicit val idGenerator = new IdGenerator {
-    override def generateId[K, V](ctx: Context[K, V]): String = UUID.randomUUID.toString
-
-    override def generatePartition[K, V](ctx: Context[K, V]): String = "p0"
-  }
+  implicit val idGenerator = DefaultIdGenerators.idGenerator
 
   implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
   //implicit val storage = new MemoryStorage(NUM_LEAF_ENTRIES, NUM_META_ENTRIES)

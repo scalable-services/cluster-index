@@ -191,7 +191,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
 
   def insertRange(left: QueryableIndex[K, V], list: Seq[Tuple3[K, V, Boolean]], last: K): Future[Int] = {
 
-    val lindex = copy(left)
+    val lindex = left.copy()
 
     //val refs = left.ctx.blockReferences
 
@@ -205,7 +205,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       //println("ctx", left.ctx.num_elements, left.ctx.levels)
 
       return for {
-        rindex <- split(lindex).map { rindex =>
+        rindex <- lindex.split().map { rindex =>
 
           indexes.put(lindex.ctx.indexId, lindex)
 

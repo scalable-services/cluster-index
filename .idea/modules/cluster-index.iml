@@ -118,6 +118,6 @@
     <orderEntry type="library" name="sbt: org.scalactic:scalactic_2.13:3.1.0:jar" level="project" />
     <orderEntry type="library" name="sbt: org.slf4j:slf4j-api:1.7.36:jar" level="project" />
     <orderEntry type="library" name="sbt: org.xerial.snappy:snappy-java:1.1.8.1:jar" level="project" />
-    <orderEntry type="library" name="sbt: services.scalable:index_2.13:0.28:jar" level="project" />
+    <orderEntry type="library" name="sbt: services.scalable:index_2.13:0.29:jar" level="project" />
   </component>
 </module>

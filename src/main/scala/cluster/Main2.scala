@@ -8,7 +8,7 @@ import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
 import services.scalable.index.grpc.{IndexContext, KVPair}
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{Bytes, Commands, Context, DefaultComparators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder}
+import services.scalable.index.{Bytes, Commands, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder}
 
 import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
@@ -31,10 +31,7 @@ object Main2 {
 
     val indexId = TestConfig.CLUSTER_INDEX_NAME //UUID.randomUUID().toString
 
-    implicit val idGenerator = new IdGenerator {
-      override def generateId[K, V](ctx: Context[K, V]): String = UUID.randomUUID.toString
-      override def generatePartition[K, V](ctx: Context[K, V]): String = "p0"
-    }
+    implicit val idGenerator = DefaultIdGenerators.idGenerator
 
     implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
     //implicit val storage = new MemoryStorage()
