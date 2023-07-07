@@ -100,7 +100,6 @@ object Main {
     assert(TestHelper.isColEqual(list.map{case (k, v, _) => (k, v, savedMetaContext.id)}, elements))
 
     val list2 = insert(0, 2222).sortBy(_._1)
-
     val listAll = (list ++ list2).sortBy(_._1)
 
     println(s"${Console.YELLOW_B}listindex before range cmds inserted: ${Helper.saveListIndex(s"before-$indexId", list.sortBy(_._1), storage.session)}${Console.RESET}")
