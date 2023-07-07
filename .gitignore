@@ -1,2 +1,6 @@
 target
 project/target
+null/
+.bsp
+.idea
+.DS_Store
