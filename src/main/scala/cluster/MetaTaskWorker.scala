@@ -14,7 +14,7 @@ import services.scalable.index.DefaultComparators._
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
 import services.scalable.index.{AsyncIndexIterator, Bytes, Commands, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Tuple}
-import cluster.ClusterSerializers._
+import cluster.Serializers._
 
 import java.util.UUID
 import scala.concurrent.duration.Duration

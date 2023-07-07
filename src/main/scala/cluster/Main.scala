@@ -1,6 +1,6 @@
 package cluster
 
-import cluster.ClusterSerializers._
+import cluster.Serializers._
 import cluster.grpc._
 import com.google.common.base.Charsets
 import com.google.protobuf.ByteString

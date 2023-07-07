@@ -16,7 +16,7 @@ import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import Printers._
 import services.scalable.index.impl.GrpcByteSerializer
-import ClusterSerializers._
+import Serializers._
 
 class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K, KeyIndexContext]){
 

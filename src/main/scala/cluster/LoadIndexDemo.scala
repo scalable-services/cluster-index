@@ -1,6 +1,6 @@
 package cluster
 
-import cluster.ClusterSerializers._
+import cluster.Serializers._
 import io.netty.util.internal.ThreadLocalRandom
 import org.slf4j.LoggerFactory
 import services.scalable.index.impl._

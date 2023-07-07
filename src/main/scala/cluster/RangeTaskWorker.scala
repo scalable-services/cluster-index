@@ -1,6 +1,6 @@
 package cluster
 
-import cluster.ClusterSerializers._
+import cluster.Serializers._
 import cluster.grpc.{ClusterIndexCommand, KeyIndexContext, MetaTask, RangeTask}
 import com.datastax.oss.driver.api.core.CqlSession
 import com.google.protobuf.ByteString
