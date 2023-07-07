@@ -15,7 +15,7 @@ import services.scalable.index.DefaultPrinters._
 import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{Bytes, Context, IdGenerator, Serializer}
+import services.scalable.index.{Bytes, Context, DefaultComparators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, Serializer}
 
 import java.util
 import java.util.UUID
@@ -36,7 +36,7 @@ class RangeTaskWorker(val id: String) {
   consumerSettings.put("value.deserializer", "org.apache.kafka.common.serialization.ByteArrayDeserializer")
   consumerSettings.put("group.id", s"range-task-workers")
   consumerSettings.put("auto.offset.reset", "earliest")
-  consumerSettings.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
+  //consumerSettings.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
   consumerSettings.put("enable.auto.commit", "false")
 
   val consumer = KafkaConsumer.create[String, Array[Byte]](vertx, consumerSettings)
@@ -90,6 +90,16 @@ class RangeTaskWorker(val id: String) {
     override def deserialize(b: Bytes): IndexContext = Any.parseFrom(b).unpack(IndexContext)
   }
 
+  val indexBuilder = IndexBuilder.create[K, V](DefaultComparators.bytesOrd)
+    .storage(storage)
+    .serializer(DefaultSerializers.grpcBytesBytesSerializer)
+    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+
+  val clusterMetaBuilder = IndexBuilder.create[K, KeyIndexContext](DefaultComparators.bytesOrd)
+    .storage(storage)
+    .serializer(grpcByteArrayKeyIndexContextSerializer)
+    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+
   def sendTasks(tasks: Seq[ClusterIndexCommand]): Future[Boolean] = {
     val records = tasks.map {
       case t: MetaTask =>
@@ -114,7 +124,7 @@ class RangeTaskWorker(val id: String) {
 
     for {
       (maxRangeK, metaCR) <- ClusterIndex.fromRange(task.id, TestHelper.NUM_LEAF_ENTRIES,
-        TestHelper.NUM_META_ENTRIES)
+        TestHelper.NUM_META_ENTRIES)(indexBuilder, clusterMetaBuilder)
 
       rangeCmds = task.commands.map { c =>
         c.list.map { case kp =>
@@ -129,7 +139,7 @@ class RangeTaskWorker(val id: String) {
       maxRangeKAfter = metaAfter.head._1
       //val rangeCtxAfter = metaAfter.head._2
 
-      firstChanged = !ord.equiv(maxRangeK, maxRangeKAfter)
+      firstChanged = !bytesOrd.equiv(maxRangeK, maxRangeKAfter)
       newRanges = metaAfter.length > 1
 
       result <- if (firstChanged || newRanges) {
@@ -149,9 +159,9 @@ class RangeTaskWorker(val id: String) {
         val idx = metaCR.indexes.find { case (k, _) => task.id != k }.get._2
         val nctx = idx.snapshot().withId(task.id)
 
-        idx.ctx = Context.fromIndexContext[Bytes, Bytes](nctx)
+        idx.ctx = Context.fromIndexContext[Bytes, Bytes](nctx)(indexBuilder)
 
-        idx.save(true).map { _ =>
+        idx.save().map { _ =>
           println(s"${Console.GREEN_B}NORMAL INSERTION on ${task.id}${Console.RESET}")
           true
         }

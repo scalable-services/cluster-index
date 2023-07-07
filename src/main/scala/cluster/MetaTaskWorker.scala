@@ -5,7 +5,6 @@ import akka.kafka.ConsumerMessage.CommittableMessage
 import akka.kafka.scaladsl.{Committer, Consumer}
 import akka.kafka.{CommitDelivery, CommitterSettings, ConsumerSettings, Subscriptions}
 import akka.stream.scaladsl.Sink
-import cluster.ClusterSerializers._
 import cluster.grpc.{KeyIndexContext, MetaTask}
 import com.google.protobuf.any.Any
 import org.apache.kafka.clients.consumer.ConsumerConfig
@@ -14,13 +13,12 @@ import org.slf4j.LoggerFactory
 import services.scalable.index.DefaultComparators._
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{AsyncIterator, Bytes, Commands, Context, IdGenerator, QueryableIndex, Serializer, Tuple}
+import services.scalable.index.{AsyncIndexIterator, Bytes, Commands, Context, DefaultComparators, DefaultPrinters, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Tuple}
+import cluster.ClusterSerializers._
 
 import java.util.UUID
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
-import services.scalable.index.DefaultPrinters._
-import Printers._
 
 class MetaTaskWorker {
 
@@ -36,7 +34,7 @@ class MetaTaskWorker {
     .withClientId(s"meta-task-worker")
     .withPollInterval(java.time.Duration.ofMillis(10L))
     .withStopTimeout(java.time.Duration.ofHours(1))
-    .withProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
+    //.withProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "1")
   //.withStopTimeout(java.time.Duration.ofSeconds(1000L))
 
   val committerSettings = CommitterSettings(system).withDelivery(CommitDelivery.waitForAck)
@@ -63,7 +61,12 @@ class MetaTaskWorker {
     override def deserialize(b: Bytes): IndexContext = Any.parseFrom(b).unpack(IndexContext)
   }
 
-  def all[K, V](it: AsyncIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
+  val clusterMetaBuilder = IndexBuilder.create[K, KeyIndexContext](DefaultComparators.bytesOrd)
+    .storage(storage)
+    .serializer(grpcByteArrayKeyIndexContextSerializer)
+    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+
+  def all[K, V](it: AsyncIndexIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
     it.hasNext().flatMap {
       case true => it.next().flatMap { list =>
         all(it).map {
@@ -89,7 +92,7 @@ class MetaTaskWorker {
     }
 
     val ctx = Await.result(storage.loadIndex(TestConfig.CLUSTER_INDEX_NAME), Duration.Inf).get
-    val meta = new QueryableIndex[K, KeyIndexContext](ctx)
+    val meta = new QueryableIndex[K, KeyIndexContext](ctx)(clusterMetaBuilder)
 
     val metaList = Await.result(TestHelper.all(meta.inOrder()), Duration.Inf).map{case (k, ctx, _) => new String(k)}
 
@@ -102,8 +105,8 @@ class MetaTaskWorker {
     for {
       _ <- if(!removeList.isEmpty) meta.execute(Seq(Commands.Remove(ctx.id, removeList))) else
         Future.successful(true)
-      _ <- meta.execute(Seq(Commands.Insert(ctx.id, insertList)), UUID.randomUUID.toString)
-      _ <- meta.save(true)
+      _ <- meta.execute(Seq(Commands.Insert(ctx.id, insertList)))
+      _ <- meta.save()
     } yield {
       logger.info(s"\n${Console.GREEN_B}FINISHED!${Console.RESET}\n")
       true

@@ -10,9 +10,9 @@
       <sourceFolder url="file://$MODULE_DIR$/../../src/main/scala" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/../../src/test/scala" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/../../target/scala-2.13/akka-grpc/main" isTestSource="false" generated="true" />
+      <sourceFolder url="file://$MODULE_DIR$/../../target/scala-2.13/akka-grpc/main" isTestSource="false" generated="true" />
       <excludeFolder url="file://$MODULE_DIR$/../../target/global-logging" />
       <excludeFolder url="file://$MODULE_DIR$/../../target/protobuf_external" />
-      <excludeFolder url="file://$MODULE_DIR$/../../target/scala-2.12" />
       <excludeFolder url="file://$MODULE_DIR$/../../target/streams" />
       <excludeFolder url="file://$MODULE_DIR$/../../target/task-temp-directory" />
     </content>
@@ -118,6 +118,6 @@
     <orderEntry type="library" name="sbt: org.scalactic:scalactic_2.13:3.1.0:jar" level="project" />
     <orderEntry type="library" name="sbt: org.slf4j:slf4j-api:1.7.36:jar" level="project" />
     <orderEntry type="library" name="sbt: org.xerial.snappy:snappy-java:1.1.8.1:jar" level="project" />
-    <orderEntry type="library" name="sbt: services.scalable:index_2.13:0.22:jar" level="project" />
+    <orderEntry type="library" name="sbt: services.scalable:index_2.13:0.28:jar" level="project" />
   </component>
 </module>

@@ -5,7 +5,7 @@ import com.datastax.oss.driver.api.core.CqlSession
 import com.google.protobuf.ByteString
 import com.google.protobuf.any.Any
 import services.scalable.index.grpc.{IndexContext, TemporalContext}
-import services.scalable.index.{AsyncIterator, Bytes, Storage, Tuple}
+import services.scalable.index.{AsyncIndexIterator, Bytes, Storage, Tuple}
 
 import java.nio.ByteBuffer
 import scala.concurrent.{ExecutionContext, Future}
@@ -54,7 +54,7 @@ object Helper {
     }
   }
 
-  def all[K, V](it: AsyncIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
+  def all[K, V](it: AsyncIndexIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
     it.hasNext().flatMap {
       case true => it.next().flatMap { list =>
         all(it).map{list ++ _}

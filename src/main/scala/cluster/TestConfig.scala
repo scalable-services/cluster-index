@@ -1,7 +1,8 @@
 package cluster
-import services.scalable.index.loader
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.config.{DefaultDriverOption, DriverConfigLoader}
+
+import java.net.InetSocketAddress
 
 object TestConfig {
 
@@ -30,10 +31,10 @@ object TestConfig {
 
   val session = CqlSession
     .builder()
-    .withLocalDatacenter("datacenter1")
+    //.withLocalDatacenter("datacenter1")
     .withConfigLoader(loader)
     .withKeyspace(KEYSPACE)
-    .withAuthCredentials(CQL_USER, CQL_PWD)
+    //.withAuthCredentials(CQL_USER, CQL_PWD)
     .build()
 
 }

@@ -4,13 +4,14 @@ import cluster.ClusterSerializers._
 import io.netty.util.internal.ThreadLocalRandom
 import org.slf4j.LoggerFactory
 import services.scalable.index.impl._
-import services.scalable.index.{Bytes, Context, IdGenerator}
+import services.scalable.index.{Bytes, Context, DefaultComparators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder}
 
 import java.util.UUID
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 import services.scalable.index.DefaultPrinters._
 import Printers._
+import cluster.grpc.KeyIndexContext
 
 object LoadIndexDemo {
 
@@ -42,12 +43,22 @@ object LoadIndexDemo {
   //implicit val storage = new MemoryStorage()
   implicit val storage = new CassandraStorage(TestConfig.session, false)
 
+  val builder = IndexBuilder.create[K, V](DefaultComparators.bytesOrd)
+    .storage(storage)
+    .serializer(DefaultSerializers.grpcBytesBytesSerializer)
+    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+
+  val clusterMetaBuilder = IndexBuilder.create[K, KeyIndexContext](DefaultComparators.bytesOrd)
+    .storage(storage)
+    .serializer(grpcByteArrayKeyIndexContextSerializer)
+    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+
   def loadAll(): List[String] = {
     val metaContext = Await.result(TestHelper.loadIndex(indexId), Duration.Inf).get
 
     val cindex = new ClusterIndex[K, V](metaContext, 256,
       NUM_LEAF_ENTRIES,
-      NUM_META_ENTRIES)
+      NUM_META_ENTRIES)(builder, clusterMetaBuilder)
 
     val ilist = cindex.inOrder().map { case (k, v, _) => k -> v }.toList.map(_._1).map { k => new String(k) }
 

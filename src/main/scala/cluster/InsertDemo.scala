@@ -8,7 +8,7 @@ import services.scalable.index.DefaultPrinters._
 import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc._
 import services.scalable.index.impl._
-import services.scalable.index.{Bytes, Commands, Context, IdGenerator, QueryableIndex}
+import services.scalable.index.{Bytes, Commands, Context, DefaultComparators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, QueryableIndex}
 
 import java.util.UUID
 import scala.concurrent.Await
@@ -42,6 +42,11 @@ object InsertDemo {
     //implicit val storage = new MemoryStorage()
     implicit val storage = new CassandraStorage(TestConfig.session, false)
 
+    val builder = IndexBuilder.create[K, V](DefaultComparators.bytesOrd)
+      .storage(storage)
+      .serializer(DefaultSerializers.grpcBytesBytesSerializer)
+      .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+
     val indexContext = Await.result(TestHelper.loadOrCreateIndex(IndexContext(
       TestConfig.CLUSTER_INDEX_NAME,
       NUM_LEAF_ENTRIES,
@@ -49,7 +54,7 @@ object InsertDemo {
     )), Duration.Inf).get
 
     var data = Seq.empty[(K, V, Boolean)]
-    val index = new QueryableIndex[K, V](indexContext)
+    val index = new QueryableIndex[K, V](indexContext)(builder)
 
     def insert(): Unit = {
       val n = 100 //rand.nextInt(1, 100)
@@ -59,8 +64,8 @@ object InsertDemo {
         val k = RandomStringUtils.randomAlphanumeric(5, 10).getBytes(Charsets.UTF_8)
         val v = RandomStringUtils.randomAlphanumeric(5).getBytes(Charsets.UTF_8)
 
-        if (!data.exists { case (k1, _, _) => ord.equiv(k, k1) } &&
-          !list.exists { case (k1, _, _) => ord.equiv(k, k1) }) {
+        if (!data.exists { case (k1, _, _) => bytesOrd.equiv(k, k1) } &&
+          !list.exists { case (k1, _, _) => bytesOrd.equiv(k, k1) }) {
           list = list :+ (k, v, true)
         }
       }

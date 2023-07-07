@@ -8,21 +8,19 @@ import cluster.grpc.{ClusterIndexCommand, KeyIndexContext, MetaTask, RangeTask}
 import com.google.protobuf.any.Any
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.apache.kafka.common.serialization.{ByteArraySerializer, StringSerializer}
-import services.scalable.index.{Block, Bytes, Cache, Commands, IdGenerator, QueryableIndex, Serializer, Storage}
+import services.scalable.index.{Block, Bytes, Cache, Commands, DefaultComparators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Storage}
 import services.scalable.index.grpc.IndexContext
 
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import Printers._
+import services.scalable.index.impl.GrpcByteSerializer
+import ClusterSerializers._
 
-class ClusterClient[K, V](metaCtx: IndexContext)(implicit val ec: ExecutionContext,
-                                            val storage: Storage,
-                                            val rangeCtxSerializer: Serializer[Block[K, KeyIndexContext]],
-                                            val cache: Cache,
-                                            val ord: Ordering[K],
-                                            val kts: K => String,
-                                            val idGenerator: IdGenerator){
+class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K, KeyIndexContext]){
+
+  import metaBuilder._
 
   val system = ActorSystem.create()
   implicit val provider = system.classicSystem
@@ -45,7 +43,7 @@ class ClusterClient[K, V](metaCtx: IndexContext)(implicit val ec: ExecutionConte
       .runWith(Producer.plainSink(settingsWithProducer)).map(_ => true)
   }
 
-  val meta = new QueryableIndex[K, KeyIndexContext](metaCtx)
+  val meta = new QueryableIndex[K, KeyIndexContext](metaCtx)(metaBuilder)
   //meta.createIndex("main", NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
 
   def findRange(k: K): Future[Option[(K, IndexContext, String)]] = {

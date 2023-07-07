@@ -5,6 +5,13 @@ package cluster.grpc;
 import "index.proto";
 import "scalapb/scalapb.proto";
 
+message InsertCommand {
+    option (scalapb.message).extends = "services.scalable.index.grpc.IndexCommand";
+
+    repeated services.scalable.index.grpc.KVPair list = 1;
+    bool upsert = 2;
+}
+
 option (scalapb.options) = {
     single_file: true
     flat_package: true
@@ -32,5 +39,5 @@ message RangeTask {
     option (scalapb.message).extends = "cluster.grpc.ClusterIndexCommand";
 
     string id = 1;
-    repeated services.scalable.index.grpc.InsertCommand commands = 2;
+    repeated InsertCommand commands = 2;
 }

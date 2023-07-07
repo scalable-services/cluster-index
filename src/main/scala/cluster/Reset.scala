@@ -9,9 +9,9 @@ object Reset {
 
     import TestConfig.session
 
-    println(session.execute("truncate table blocks;"))
-    println(session.execute("truncate table indexes;"))
-    println(session.execute("truncate table test_indexes;"))
+    println(session.execute("truncate table blocks;").wasApplied())
+    println(session.execute("truncate table indexes;").wasApplied())
+    println(session.execute("truncate table test_indexes;").wasApplied())
 
     session.close()
 

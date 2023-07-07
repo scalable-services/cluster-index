@@ -3,7 +3,7 @@ package cluster
 import cluster.grpc.KeyIndexContext
 import com.google.protobuf.ByteString
 import services.scalable.index.grpc.{IndexContext, RootRef}
-import services.scalable.index.{AsyncIterator, Block, Bytes, Cache, Errors, IdGenerator, InsertionResult, QueryableIndex, Serializer, Storage, Tuple}
+import services.scalable.index.{AsyncIndexIterator, Block, Bytes, Cache, Errors, IdGenerator, IndexBuilder, InsertionResult, QueryableIndex, Serializer, Storage, Tuple}
 
 import java.util.UUID
 import scala.collection.concurrent.TrieMap
@@ -16,17 +16,11 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
                          val maxNItems: Int,
                          val numLeafItems: Int,
                          val numMetaItems: Int
-                        )(implicit val ec: ExecutionContext,
-                          val storage: Storage,
-                          val blockSerializer: Serializer[Block[K, V]],
-                          val dbCtxSerializer: Serializer[Block[K, KeyIndexContext]],
-                          val cache: Cache,
-                          val ord: Ordering[K],
-                          val ks: K => String,
-                          val vs: V => String,
-                          val kics: KeyIndexContext => String,
-                          val idGenerator: IdGenerator) {
-  val meta = new QueryableIndex[K, KeyIndexContext](metaContext)
+                        )(val indexBuilder: IndexBuilder[K, V],
+                          val clusterMetaBuilder: IndexBuilder[K, KeyIndexContext]) {
+  import clusterMetaBuilder._
+
+  val meta = new QueryableIndex[K, KeyIndexContext](metaContext)(clusterMetaBuilder)
 
   var indexes = TrieMap.empty[String, QueryableIndex[K, V]]
 
@@ -34,12 +28,12 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     Future.sequence(indexes.map { case (id, index) =>
       println(s"saving index ${index.ctx.indexId}")
 
-      TestHelper.loadOrCreateIndex(index.ctx.snapshot(false)).flatMap { _ =>
-        index.save(clear)
+      TestHelper.loadOrCreateIndex(index.ctx.currentSnapshot()).flatMap { _ =>
+        index.save()
       }
 
     }).flatMap { ok =>
-      meta.save(clear)
+      meta.save()
     }
   }
 
@@ -47,8 +41,8 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     Future.sequence(indexes.map { case (id, index) =>
       println(s"saving index[2] ${index.ctx.indexId}")
 
-      TestHelper.loadOrCreateIndex(index.ctx.snapshot(false)).flatMap { _ =>
-        index.save(clear)
+      TestHelper.loadOrCreateIndex(index.ctx.snapshot()).flatMap { _ =>
+        index.save()
       }
 
     }).map(_.toSeq.length == indexes.size)
@@ -113,7 +107,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       .withNumElements(0)
       .withLevels(0)
       .withNumLeafItems(numLeafItems)
-      .withNumMetaItems(numMetaItems))
+      .withNumMetaItems(numMetaItems))(indexBuilder)
 
     indexes.put(index.ctx.indexId, index)
 
@@ -125,7 +119,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     }
   }
 
-  def split(left: QueryableIndex[K, V]): (QueryableIndex[K, V], QueryableIndex[K, V]) = {
+  /*def split(left: QueryableIndex[K, V]): (QueryableIndex[K, V], QueryableIndex[K, V]) = {
 
     var leftR = Await.result(left.ctx.getMeta(left.ctx.root.get), Duration.Inf)
 
@@ -141,24 +135,24 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       ptr.nElements
     }.sum
 
-    val leftICtx = left.c
+    val leftICtx = left.descriptor
       .withId(left.ctx.id)
-      .withMaxNItems(left.c.maxNItems)
+      .withMaxNItems(left.descriptor.maxNItems)
       .withNumElements(leftN)
       .withLevels(leftR.level)
-      .withNumLeafItems(left.c.numLeafItems)
-      .withNumMetaItems(left.c.numMetaItems)
+      .withNumLeafItems(left.descriptor.numLeafItems)
+      .withNumMetaItems(left.descriptor.numMetaItems)
 
-    val rightICtx = left.c
+    val rightICtx = left.descriptor
       .withId(UUID.randomUUID().toString)
-      .withMaxNItems(left.c.maxNItems)
+      .withMaxNItems(left.descriptor.maxNItems)
       .withNumElements(rightN)
       .withLevels(leftR.level)
-      .withNumLeafItems(left.c.numLeafItems)
-      .withNumMetaItems(left.c.numMetaItems)
+      .withNumLeafItems(left.descriptor.numLeafItems)
+      .withNumMetaItems(left.descriptor.numMetaItems)
 
-    val lindex = new QueryableIndex[K, V](leftICtx)
-    val rindex = new QueryableIndex[K, V](rightICtx)
+    val lindex = new QueryableIndex[K, V](leftICtx)(indexBuilder)
+    val rindex = new QueryableIndex[K, V](rightICtx)(indexBuilder)
 
     val leftRoot = leftR.copy()(lindex.ctx)
     lindex.ctx.root = Some(leftRoot.unique_id)
@@ -179,26 +173,25 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     assert(ileft == (idataL ++ idataR))*/
 
     (lindex, rindex)
-  }
+  }*/
 
-  def copy(index: QueryableIndex[K, V]): QueryableIndex[K, V] = {
-    val context = IndexContext(index.ctx.indexId, index.c.numLeafItems, index.c.numMetaItems,
+  /*def copy(index: QueryableIndex[K, V]): QueryableIndex[K, V] = {
+    val context = IndexContext(index.ctx.indexId, index.descriptor.numLeafItems, index.descriptor.numMetaItems,
       index.ctx.root.map { r => RootRef(r._1, r._2) }, index.ctx.levels, index.ctx.num_elements,
-      index.c.maxNItems)
+      index.descriptor.maxNItems)
 
-    val copy = new QueryableIndex[K, V](context)(ec,
-      index.storage, index.serializer, index.cache, index.ord, index.idGenerator, ks, vs)
+    val copy = new QueryableIndex[K, V](context)(indexBuilder)
 
-    index.ctx.blockReferences.foreach { case (id, _) =>
-      copy.ctx.blockReferences += id -> id
+    index.ctx.newBlocks.foreach { case (id, _) =>
+      copy.ctx.newBlocks += id -> id
     }
 
     copy
-  }
+  }*/
 
   def insertRange(left: QueryableIndex[K, V], list: Seq[Tuple3[K, V, Boolean]], last: K): Future[Int] = {
 
-    val lindex = left.copy()//copy(left)
+    val lindex = copy(left)
 
     //val refs = left.ctx.blockReferences
 
@@ -212,7 +205,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       //println("ctx", left.ctx.num_elements, left.ctx.levels)
 
       return for {
-        rindex <- lindex.split().map { rindex =>
+        rindex <- split(lindex).map { rindex =>
 
           indexes.put(lindex.ctx.indexId, lindex)
 
@@ -360,7 +353,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
 
   }*/
 
-  def all[K, V](it: AsyncIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
+  def all[K, V](it: AsyncIndexIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
     it.hasNext().flatMap {
       case true => it.next().flatMap { list =>
         all(it).map {
@@ -379,8 +372,9 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     iter.map { case (k, link, version) =>
       val ctx = Await.result(storage.loadIndex(link.ctxId), Duration.Inf).get
 
-      println(s"range n: ${ctx.numElements}")
-      val r = Await.result(all(new QueryableIndex[K, V](ctx).inOrder()), Duration.Inf)
+      //println(s"range n: ${ctx.numElements}")
+      val index = new QueryableIndex[K, V](ctx)(indexBuilder)
+      val r = Await.result(all(index.inOrder()), Duration.Inf)
 
       r
     }.flatten
@@ -396,7 +390,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       val ctx = Await.result(storage.loadIndex(link.ctxId), Duration.Inf).get
 
       val link2 = Await.result(storage.loadIndex(ctx.id), Duration.Inf).get
-      val r = Await.result(all(new QueryableIndex[K, V](link2).inOrder()), Duration.Inf)
+      val r = Await.result(all(new QueryableIndex[K, V](link2)(indexBuilder).inOrder()), Duration.Inf)
 
       println(s"range ${ctx.id} n: ${ctx.numElements}")
 
@@ -409,13 +403,11 @@ object ClusterIndex {
 
   def fromRange(rangeId: String,
                       numLeafItems: Int,
-                      numMetaItems: Int)(implicit ec: ExecutionContext,
-                       storage: Storage,
-                       blockSerializer: Serializer[Block[Bytes, Bytes]],
-                       dbCtxSerializer: Serializer[Block[Bytes, KeyIndexContext]],
-                       cache: Cache,
-                       ord: Ordering[Bytes],
-                       idGenerator: IdGenerator): Future[(Bytes, ClusterIndex[Bytes, Bytes])] = {
+                      numMetaItems: Int)(indexBuilder: IndexBuilder[Bytes, Bytes],
+                                         clusterMetaBuilder: IndexBuilder[Bytes, KeyIndexContext]
+  ): Future[(Bytes, ClusterIndex[Bytes, Bytes])] = {
+
+    import indexBuilder._
 
     val metaCtx = IndexContext()
       .withId(UUID.randomUUID.toString)
@@ -424,12 +416,12 @@ object ClusterIndex {
       .withNumLeafItems(numLeafItems)
       .withNumMetaItems(numMetaItems)
 
-    val metaRange = new QueryableIndex[Bytes, KeyIndexContext](metaCtx)
+    val metaRange = new QueryableIndex[Bytes, KeyIndexContext](metaCtx)(clusterMetaBuilder)
 
     for {
       rangeCtx <- storage.loadIndex(rangeId).map(_.get)
 
-      rangeIndex = new QueryableIndex[Bytes, Bytes](rangeCtx)
+      rangeIndex = new QueryableIndex[Bytes, Bytes](rangeCtx)(indexBuilder)
 
       maxRangeK <- rangeIndex.max().map(_.get).map(_._1)
 
@@ -439,10 +431,10 @@ object ClusterIndex {
 
     } yield {
 
-      val clusterRangeCtx = metaRange.ctx.snapshot(false)
+      val clusterRangeCtx = metaRange.ctx.snapshot()
 
       val metaCR = new ClusterIndex[Bytes, Bytes](clusterRangeCtx, 256,
-        clusterRangeCtx.numLeafItems, clusterRangeCtx.numMetaItems)
+        clusterRangeCtx.numLeafItems, clusterRangeCtx.numMetaItems)(indexBuilder, clusterMetaBuilder)
 
       metaCR.indexes.put(rangeIndex.ctx.indexId, rangeIndex)
 

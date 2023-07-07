@@ -2,7 +2,7 @@ package cluster
 
 import cluster.grpc.KeyIndexContext
 import com.google.common.base.Charsets
-import services.scalable.index.{AsyncIterator, Block, Bytes, Cache, IdGenerator, QueryableIndex, Serializer, Storage, Tuple}
+import services.scalable.index.{AsyncIndexIterator, Block, Bytes, Cache, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Storage, Tuple}
 import services.scalable.index.grpc.{IndexContext, TemporalContext}
 
 import scala.concurrent.duration.Duration
@@ -15,27 +15,21 @@ object TestHelper {
   val NUM_META_ENTRIES = 8 //rand.nextInt(5, 64)
   val MAX_ITEMS = 1024
 
-  def loadIndexInOrder(id: String)(implicit ec: ExecutionContext,
-                                         storage: Storage,
-                                         serializer: Serializer[Block[Bytes, Bytes]],
-                                         cache: Cache,
-                                         ord: Ordering[Bytes],
-                                         idGenerator: IdGenerator): Seq[(String, KeyIndexContext)] = {
+  def loadIndexInOrder(id: String)(indexBuilder: IndexBuilder[Bytes, Bytes]): Seq[(String, KeyIndexContext)] = {
+    import indexBuilder._
+
     val metaCtx = Await.result(storage.loadIndex(id), Duration.Inf)
-    val m = new QueryableIndex[Bytes, Bytes](metaCtx.get)
+    val m = new QueryableIndex[Bytes, Bytes](metaCtx.get)(indexBuilder)
     val metaKeys = Await.result(TestHelper.all(m.inOrder()), Duration.Inf).map { x => new String(x._1, Charsets.UTF_8) ->
     KeyIndexContext.parseFrom(x._2)}
 
     metaKeys
   }
 
-  def loadIndexInOrder(ctx: IndexContext)(implicit ec: ExecutionContext,
-                                   storage: Storage,
-                                   serializer: Serializer[Block[Bytes, Bytes]],
-                                   cache: Cache,
-                                   ord: Ordering[Bytes],
-                                   idGenerator: IdGenerator): Seq[String] = {
-    val m = new QueryableIndex[Bytes, Bytes](ctx)
+  def loadIndexInOrder(ctx: IndexContext)(indexBuilder: IndexBuilder[Bytes, Bytes]): Seq[String] = {
+    import indexBuilder._
+
+    val m = new QueryableIndex[Bytes, Bytes](ctx)(indexBuilder)
     val metaKeys = Await.result(TestHelper.all(m.inOrder()), Duration.Inf).map { x =>
       new String(x._1, Charsets.UTF_8)
     }
@@ -64,7 +58,7 @@ object TestHelper {
     }
   }
 
-  def all[K, V](it: AsyncIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
+  def all[K, V](it: AsyncIndexIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
     it.hasNext().flatMap {
       case true => it.next().flatMap { list =>
         all(it).map{list ++ _}

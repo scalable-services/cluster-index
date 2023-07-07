@@ -45,6 +45,7 @@ services:
     image:  bitnami/cassandra:4.1.0-debian-11-r18
     ports:
       - 9042:9042
+      - 7001:7000
     volumes:
       - ~/apps/cassandra:/var/lib/cassandra
     environment:
