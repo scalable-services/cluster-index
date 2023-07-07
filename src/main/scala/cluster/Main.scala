@@ -123,7 +123,7 @@ object Main {
         InsertCommand(c.asInstanceOf[Commands.Insert[K, V]].list.map { case (k, v, _) =>
           KVPair(ByteString.copyFrom(k), ByteString.copyFrom(v))
         }, true)
-      })
+      }.toSeq)
     }.toSeq
 
     val ok = Await.result(clusterc.sendTasks(tasks), Duration.Inf)
