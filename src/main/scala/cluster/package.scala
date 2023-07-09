@@ -17,17 +17,20 @@ package object cluster {
 
         c = x.a.compare(y.a)
 
+        c
+
+        /*if(c != 0) return c
+
+        c = x.valid.compareTo(y.valid)
+
         if(c != 0) return c
 
         c = comp.compare(x.v.toByteArray, y.v.toByteArray)
 
         if(c != 0) return c
 
-        c = x.valid.compareTo(y.valid)
+        x.t.compareTo(y.t)*/
 
-        if(c != 0) return c
-
-        x.t.compareTo(y.t)
       }
     }
   }
