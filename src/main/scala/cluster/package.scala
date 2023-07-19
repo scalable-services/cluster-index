@@ -1,36 +1,29 @@
-import cluster.grpc.{EAVT, KeyIndexContext}
+import cluster.grpc.{IndexValue, KeyIndexContext}
 import com.google.common.primitives.UnsignedBytes
 import com.google.protobuf.any.Any
+import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.GrpcByteSerializer
 import services.scalable.index.{Bytes, Serializer}
 
 package object cluster {
 
   object Comparators {
-    implicit val eavtOrd = new Ordering[EAVT] {
+
+    implicit val indexValueOrd = new Ordering[IndexValue] {
       val comp = UnsignedBytes.lexicographicalComparator()
 
-      override def compare(x: EAVT, y: EAVT): Int = {
-        var c = x.e.compare(y.e)
+      override def compare(x: IndexValue, y: IndexValue): Int = {
+        var c = comp.compare(x.value.toByteArray, y.value.toByteArray)
 
-        if(c != 0) return c
+        /*if (c != 0) return c
 
-        c = x.a.compare(y.a)
+        c = x.valid.compare(y.valid)
+
+        if (c != 0) return c
+
+        x.tmp.compare(y.tmp)*/
 
         c
-
-        /*if(c != 0) return c
-
-        c = x.valid.compareTo(y.valid)
-
-        if(c != 0) return c
-
-        c = comp.compare(x.v.toByteArray, y.v.toByteArray)
-
-        if(c != 0) return c
-
-        x.t.compareTo(y.t)*/
-
       }
     }
   }
@@ -38,25 +31,29 @@ package object cluster {
   object Serializers {
     import services.scalable.index.DefaultSerializers._
 
+    implicit val metaIndexSerializer = new Serializer[IndexContext] {
+      override def serialize(t: IndexContext): Bytes = Any.pack(t).toByteArray
+      override def deserialize(b: Bytes): IndexContext = Any.parseFrom(b).unpack(IndexContext)
+    }
+
     implicit val keyIndexSerializer = new Serializer[KeyIndexContext] {
       override def serialize(t: KeyIndexContext): Bytes = Any.pack(t).toByteArray
       override def deserialize(b: Bytes): KeyIndexContext = Any.parseFrom(b).unpack(KeyIndexContext)
     }
 
-    implicit val eavtSerializer = new Serializer[EAVT] {
-      override def serialize(t: EAVT): Bytes = Any.pack(t).toByteArray
-      override def deserialize(b: Bytes): EAVT = Any.parseFrom(b).unpack(EAVT)
+    implicit val indexValueSerializer = new Serializer[IndexValue] {
+      override def serialize(t: IndexValue): Bytes = Any.pack(t).toByteArray
+      override def deserialize(b: Bytes): IndexValue = Any.parseFrom(b).unpack(IndexValue)
     }
 
-    implicit val grpcByteArrayKeyIndexContextSerializer = new GrpcByteSerializer[Bytes, KeyIndexContext]()
-
-    implicit val grpcEAVTBytesSerializer = new GrpcByteSerializer[EAVT, Bytes]()
+    implicit val grpcStringIndexValueBytesSerializer = new GrpcByteSerializer[String, IndexValue]()
+    implicit val grpcStringKeyIndexContextSerializer = new GrpcByteSerializer[String, KeyIndexContext]()
   }
 
   object Printers {
     implicit def keyIndexContextToStringPrinter(k: KeyIndexContext): String = k.toString
-    implicit def eavtToStringPrinter(k: EAVT): String = {
-     s"(${k.v.toStringUtf8}, ${k.a}, ${k.e}, ${k.t}, ${k.valid})"
+    implicit def indexValueToString(k: IndexValue): String = {
+     s"(${k.value.toStringUtf8}, ${k.tmp}, ${k.valid})"
     }
   }
 

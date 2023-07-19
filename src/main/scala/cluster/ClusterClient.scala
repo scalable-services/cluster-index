@@ -184,13 +184,21 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
 
     /*Future.sequence(commands.map {
       case c: Commands.Insert[K, V] => sliceInsertion(c)(ranges)
-      /*case c: Commands.Remove[K, V] => sliceRemoval(c)(ranges)
-      case c: Commands.Update[K, V] => sliceUpdate(c)(ranges)*/
+      case c: Commands.Update[K, V] => sliceUpdate(c)(ranges)
+      //case c: Commands.Update[K, V] => sliceUpdate(c)(ranges)
     }).map { _ =>
       ranges.toMap
     }*/
 
-    sliceInsertion(commands.head.asInstanceOf[Commands.Insert[K, V]])(ranges).map(_ => ranges)
+    //sliceInsertion(commands.head.asInstanceOf[Commands.Insert[K, V]])(ranges).map(_ => ranges)
+
+    commands.foreach {
+      case c: Commands.Insert[K, V] => Await.result(sliceInsertion(c)(ranges), Duration.Inf)
+      case c: Commands.Update[K, V] => Await.result(sliceUpdate(c)(ranges), Duration.Inf)
+      //case c: Commands.Update[K, V] => sliceUpdate(c)(ranges)
+    }
+
+    Future.successful(ranges)
   }
 
 }

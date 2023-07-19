@@ -10,22 +10,19 @@ import com.google.protobuf.any.Any
 import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.apache.kafka.common.serialization.{ByteArrayDeserializer, StringDeserializer}
 import org.slf4j.LoggerFactory
-import services.scalable.index.DefaultComparators._
-import services.scalable.index.grpc.IndexContext
-import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{AsyncIndexIterator, Bytes, Commands, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Tuple}
-import cluster.Serializers._
+import services.scalable.index.{AsyncIndexIterator, Commands, IndexBuilder, QueryableIndex, Tuple}
 
-import java.util.UUID
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 
-class MetaTaskWorker {
+class MetaTaskWorker[K, V](clusterMetaBuilder: IndexBuilder[K, V]) {
+
+  import clusterMetaBuilder._
 
   val logger = LoggerFactory.getLogger(this.getClass)
 
   implicit val system = ActorSystem.create()
-  implicit val ec = system.dispatcher
+  //implicit val ec = system.dispatcher
 
   val consumerSettings = ConsumerSettings[String, Array[Byte]](system, new StringDeserializer, new ByteArrayDeserializer)
     .withBootstrapServers("localhost:9092")
@@ -38,29 +35,6 @@ class MetaTaskWorker {
   //.withStopTimeout(java.time.Duration.ofSeconds(1000L))
 
   val committerSettings = CommitterSettings(system).withDelivery(CommitDelivery.waitForAck)
-
-  type K = Bytes
-  type V = IndexContext
-
-  val NUM_LEAF_ENTRIES = 8
-  val NUM_META_ENTRIES = 8
-
-  implicit val idGenerator = DefaultIdGenerators.idGenerator
-
-  implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
-  //implicit val storage = new MemoryStorage(NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
-  implicit val storage = new CassandraStorage(TestConfig.session, false)
-
-  implicit val metaIndexSerializer = new Serializer[IndexContext] {
-    override def serialize(t: IndexContext): Bytes = Any.pack(t).toByteArray
-
-    override def deserialize(b: Bytes): IndexContext = Any.parseFrom(b).unpack(IndexContext)
-  }
-
-  val clusterMetaBuilder = IndexBuilder.create[K, KeyIndexContext](DefaultComparators.bytesOrd)
-    .storage(storage)
-    .serializer(grpcByteArrayKeyIndexContextSerializer)
-    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
 
   def all[K, V](it: AsyncIndexIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
     it.hasNext().flatMap {
@@ -80,23 +54,24 @@ class MetaTaskWorker {
     logger.info(s"\n${Console.MAGENTA_B}meta task: ${task.id}${Console.RESET}\n")
 
     val removeList = task.removeRanges.map { k =>
-      Tuple2(k.toByteArray, None)
+      Tuple2(clusterMetaBuilder.keySerializer.deserialize(k.toByteArray), None)
     }
 
     val insertList = task.insertRanges.map { tuple =>
-      Tuple3(tuple.key.toByteArray, KeyIndexContext(tuple.key, tuple.ctxId), true)
+      Tuple3(clusterMetaBuilder.keySerializer.deserialize(tuple.key.toByteArray),
+        clusterMetaBuilder.valueSerializer.deserialize(Any.pack(tuple).toByteArray), true)
     }
 
     val ctx = Await.result(storage.loadIndex(TestConfig.CLUSTER_INDEX_NAME), Duration.Inf).get
-    val meta = new QueryableIndex[K, KeyIndexContext](ctx)(clusterMetaBuilder)
+    val meta = new QueryableIndex[K, V](ctx)(clusterMetaBuilder)
 
-    val metaList = Await.result(TestHelper.all(meta.inOrder()), Duration.Inf).map{case (k, ctx, _) => new String(k)}
+    val metaList = Await.result(TestHelper.all(meta.inOrder()), Duration.Inf).map{case (k, ctx, _) => clusterMetaBuilder.ks(k)}
 
     println(s"${Console.MAGENTA_B}meta list: ${metaList}${Console.RESET}")
 
     val oldMetaList = Await.result(TestHelper.all(meta.inOrder()), Duration.Inf)
 
-    println(s"${Console.YELLOW_B}old meta list: ${oldMetaList.map{x => new String(x._1)}}${Console.RESET}")
+    println(s"${Console.YELLOW_B}old meta list: ${oldMetaList.map{x => clusterMetaBuilder.ks(x._1)}}${Console.RESET}")
 
     for {
       _ <- if(!removeList.isEmpty) meta.execute(Seq(Commands.Remove(ctx.id, removeList))) else

@@ -12,6 +12,12 @@ message InsertCommand {
     bool upsert = 2;
 }
 
+message UpdateCommand {
+    option (scalapb.message).extends = "services.scalable.index.grpc.IndexCommand";
+
+    repeated services.scalable.index.grpc.KVPair list = 1;
+}
+
 option (scalapb.options) = {
     single_file: true
     flat_package: true
@@ -39,13 +45,12 @@ message RangeTask {
     option (scalapb.message).extends = "cluster.grpc.ClusterIndexCommand";
 
     string id = 1;
-    repeated InsertCommand commands = 2;
+    repeated InsertCommand insertions = 2;
+    repeated UpdateCommand updates = 3;
 }
 
-message EAVT {
-    string e = 1;
-    string a = 2;
-    bytes v = 3;
-    int64 t = 4;
-    bool valid = 5;
+message IndexValue {
+    bytes value = 1;
+    int64 tmp = 2;
+    bool valid = 3;
 }

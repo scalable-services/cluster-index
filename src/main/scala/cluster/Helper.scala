@@ -4,8 +4,8 @@ import cluster.grpc.tests.ListIndex
 import com.datastax.oss.driver.api.core.CqlSession
 import com.google.protobuf.ByteString
 import com.google.protobuf.any.Any
-import services.scalable.index.grpc.{IndexContext, TemporalContext}
-import services.scalable.index.{AsyncIndexIterator, Bytes, Storage, Tuple}
+import services.scalable.index.grpc.{IndexContext, KVPair, TemporalContext}
+import services.scalable.index.{AsyncIndexIterator, Bytes, Serializer, Storage, Tuple}
 
 import java.nio.ByteBuffer
 import scala.concurrent.{ExecutionContext, Future}
@@ -13,9 +13,11 @@ import scala.jdk.CollectionConverters.CollectionHasAsScala
 
 object Helper {
 
-  def saveListIndex(id: String, data: Seq[(Bytes, Bytes, Boolean)], session: CqlSession): Boolean = {
-    val listIndex = ListIndex(id, data.map { case (k, _, _) =>
-      ByteString.copyFrom(k)
+  def saveListIndex[K, V](id: String, data: Seq[(K, V, String)], session: CqlSession,
+                          kser: Serializer[K], vser: Serializer[V]): Boolean = {
+    val listIndex = ListIndex(id, data.map { case (k, v, _) =>
+      KVPair().withKey(ByteString.copyFrom(kser.serialize(k)))
+        .withValue(ByteString.copyFrom(vser.serialize(v)))
     })
 
     val serializedListIndex = Any.pack(listIndex).toByteArray

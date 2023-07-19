@@ -1,30 +1,25 @@
 package cluster
 
-import cluster.Serializers._
-import cluster.grpc.{ClusterIndexCommand, KeyIndexContext, MetaTask, RangeTask}
-import com.datastax.oss.driver.api.core.CqlSession
+import cluster.grpc._
 import com.google.protobuf.ByteString
 import com.google.protobuf.any.Any
 import io.vertx.core.Vertx
 import io.vertx.kafka.client.consumer.{KafkaConsumer, KafkaConsumerRecords}
 import io.vertx.kafka.client.producer.{KafkaProducer, KafkaProducerRecord}
-import org.apache.kafka.clients.consumer.ConsumerConfig
 import org.slf4j.LoggerFactory
-import services.scalable.index.DefaultComparators._
-import services.scalable.index.DefaultPrinters._
-import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc.IndexContext
-import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{Bytes, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, Serializer}
+import services.scalable.index.{Bytes, Commands, Context, IndexBuilder, Serializer}
 
 import java.util
-import java.util.UUID
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
 import scala.jdk.CollectionConverters.IteratorHasAsScala
 import scala.jdk.FutureConverters._
 
-class RangeTaskWorker(val id: String) {
+class RangeTaskWorker[K, V](val id: String)(val indexBuilder: IndexBuilder[K, V],
+                                            val clusterIndexBuilder: IndexBuilder[K, KeyIndexContext]) {
+
+  import indexBuilder._
 
   val logger = LoggerFactory.getLogger(this.getClass)
 
@@ -61,7 +56,7 @@ class RangeTaskWorker(val id: String) {
     }*/
 
     msgs.foreach { rt =>
-      Await.result(insertRange(rt), Duration.Inf)
+      Await.result(execute(rt), Duration.Inf)
     }
 
     consumer.commit().result()
@@ -70,31 +65,6 @@ class RangeTaskWorker(val id: String) {
   consumer.handler(_ => {})
   consumer.batchHandler(handler)
   consumer.subscribe(TestConfig.RANGE_INDEX_TOPIC).result()
-
-  type K = Bytes
-  type V = Bytes
-
-  implicit val idGenerator = DefaultIdGenerators.idGenerator
-  import scala.concurrent.ExecutionContext.Implicits.global
-
-  implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
-  //implicit val storage = new MemoryStorage(NUM_LEAF_ENTRIES, NUM_META_ENTRIES)
-  implicit val storage = new CassandraStorage(TestConfig.session, false)
-
-  implicit val metaIndexSerializer = new Serializer[IndexContext] {
-    override def serialize(t: IndexContext): Bytes = Any.pack(t).toByteArray
-    override def deserialize(b: Bytes): IndexContext = Any.parseFrom(b).unpack(IndexContext)
-  }
-
-  val indexBuilder = IndexBuilder.create[K, V](DefaultComparators.bytesOrd)
-    .storage(storage)
-    .serializer(DefaultSerializers.grpcBytesBytesSerializer)
-    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
-
-  val clusterMetaBuilder = IndexBuilder.create[K, KeyIndexContext](DefaultComparators.bytesOrd)
-    .storage(storage)
-    .serializer(grpcByteArrayKeyIndexContextSerializer)
-    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
 
   def sendTasks(tasks: Seq[ClusterIndexCommand]): Future[Boolean] = {
     val records = tasks.map {
@@ -114,37 +84,51 @@ class RangeTaskWorker(val id: String) {
     producer.flush().toCompletionStage.asScala.map(_ => true)
   }
 
-  def insertRange(task: RangeTask): Future[Boolean] = {
+  def execute(task: RangeTask): Future[Boolean] = {
 
     logger.info(s"\n${Console.MAGENTA_B}range task for ${task.id}${Console.RESET}\n")
 
+    val insertions = task.insertions.map { c =>
+      Commands.Insert(task.id, c.list.map { case kp =>
+        Tuple3(indexBuilder.keySerializer.deserialize(kp.key.toByteArray), indexBuilder.valueSerializer
+          .deserialize(kp.value.toByteArray), c.upsert)
+      })
+    }
+
+    val updates = task.updates.map { c =>
+      Commands.Update(task.id, c.list.map { case kp =>
+        Tuple3(indexBuilder.keySerializer.deserialize(kp.key.toByteArray), indexBuilder.valueSerializer
+          .deserialize(kp.value.toByteArray), Some(kp.version))
+      })
+    }
+
+    val rangeCmds: Seq[Commands.Command[K, V]] = insertions ++ updates
+
     for {
-      (maxRangeK, metaCR) <- ClusterIndex.fromRange(task.id, TestHelper.NUM_LEAF_ENTRIES,
-        TestHelper.NUM_META_ENTRIES)(indexBuilder, clusterMetaBuilder)
+      (maxRangeK, metaCR) <- ClusterIndex.fromRange[K, V](task.id, TestHelper.NUM_LEAF_ENTRIES,
+        TestHelper.NUM_META_ENTRIES)(indexBuilder, clusterIndexBuilder)
 
-      rangeCmds = task.commands.map { c =>
-        c.list.map { case kp =>
-          Tuple3(kp.key.toByteArray, kp.value.toByteArray, true)
-        }
-      }.flatten.sortBy(_._1)
-
-      n <- metaCR.insert(rangeCmds)
+      n <- metaCR.execute(rangeCmds).map { r =>
+        if(r.error.isDefined) throw r.error.get
+        r
+      }
       ok <- metaCR.saveIndexes(false)
+
       metaAfter <- TestHelper.all(metaCR.meta.inOrder())
 
       maxRangeKAfter = metaAfter.head._1
       //val rangeCtxAfter = metaAfter.head._2
 
-      firstChanged = !bytesOrd.equiv(maxRangeK, maxRangeKAfter)
+      firstChanged = !indexBuilder.ord.equiv(maxRangeK, maxRangeKAfter)
       newRanges = metaAfter.length > 1
 
       result <- if (firstChanged || newRanges) {
         var metaTask = MetaTask("meta")
 
         metaTask = metaTask
-          .withRemoveRanges(Seq(ByteString.copyFrom(maxRangeK)))
+          .withRemoveRanges(Seq(ByteString.copyFrom(indexBuilder.keySerializer.serialize(maxRangeK))))
           .withInsertRanges(metaAfter.map { case (k, c, _) =>
-            KeyIndexContext(ByteString.copyFrom(k), c.ctxId)
+            KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(k)), c.ctxId)
           })
 
         println(s"${Console.RED_B}SENDING META TASK ${task.id}${Console.RESET}")
@@ -152,10 +136,11 @@ class RangeTaskWorker(val id: String) {
         sendTasks(Seq(metaTask))
       } else {
 
-        val idx = metaCR.indexes.find { case (k, _) => task.id != k }.get._2
-        val nctx = idx.snapshot().withId(task.id)
+        //val idx = metaCR.indexes.find { case (id, _) => task.id != id }.get._2
+        val idx = metaCR.indexes.head._2
 
-        idx.ctx = Context.fromIndexContext[Bytes, Bytes](nctx)(indexBuilder)
+        val nctx = idx.snapshot().withId(task.id)
+        idx.ctx = Context.fromIndexContext[K, V](nctx)(indexBuilder)
 
         idx.save().map { _ =>
           println(s"${Console.GREEN_B}NORMAL INSERTION on ${task.id}${Console.RESET}")

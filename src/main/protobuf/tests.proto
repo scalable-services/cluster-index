@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package cluster.grpc.tests;
 
+import "index.proto";
 import "scalapb/scalapb.proto";
 
 option (scalapb.options) = {
@@ -12,5 +13,5 @@ option (scalapb.options) = {
 
 message ListIndex {
   string id = 1;
-  repeated bytes keys = 2;
+  repeated services.scalable.index.grpc.KVPair data = 2;
 }

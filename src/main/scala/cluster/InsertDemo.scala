@@ -4,13 +4,10 @@ import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
-import services.scalable.index.DefaultPrinters._
-import services.scalable.index.DefaultSerializers._
 import services.scalable.index.grpc._
 import services.scalable.index.impl._
-import services.scalable.index.{Bytes, Commands, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder, QueryableIndex}
+import services.scalable.index.{Bytes, Commands, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IndexBuilder, QueryableIndex}
 
-import java.util.UUID
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
@@ -30,8 +27,8 @@ object InsertDemo {
 
     import services.scalable.index.DefaultComparators._
 
-    val NUM_LEAF_ENTRIES = 8 //rand.nextInt(5, 64)
-    val NUM_META_ENTRIES = 8 //rand.nextInt(5, 64)
+    val NUM_LEAF_ENTRIES = TestHelper.NUM_LEAF_ENTRIES
+    val NUM_META_ENTRIES = TestHelper.NUM_META_ENTRIES
 
     implicit val idGenerator = DefaultIdGenerators.idGenerator
 
@@ -39,7 +36,8 @@ object InsertDemo {
     //implicit val storage = new MemoryStorage()
     implicit val storage = new CassandraStorage(TestConfig.session, false)
 
-    val builder = IndexBuilder.create[K, V](DefaultComparators.bytesOrd)
+    val builder = IndexBuilder.create[K, V](DefaultComparators.bytesOrd, DefaultSerializers.bytesSerializer,
+      DefaultSerializers.bytesSerializer)
       .storage(storage)
       .serializer(DefaultSerializers.grpcBytesBytesSerializer)
       .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)

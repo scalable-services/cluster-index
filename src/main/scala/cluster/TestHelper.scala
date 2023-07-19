@@ -1,6 +1,6 @@
 package cluster
 
-import cluster.grpc.KeyIndexContext
+import cluster.grpc.{EAVT, KeyIndexContext}
 import com.google.common.base.Charsets
 import services.scalable.index.{AsyncIndexIterator, Block, Bytes, Cache, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Storage, Tuple}
 import services.scalable.index.grpc.{IndexContext, TemporalContext}
@@ -14,28 +14,6 @@ object TestHelper {
   val NUM_LEAF_ENTRIES = 8 //rand.nextInt(5, 64)
   val NUM_META_ENTRIES = 8 //rand.nextInt(5, 64)
   val MAX_ITEMS = 1024
-
-  def loadIndexInOrder(id: String)(indexBuilder: IndexBuilder[Bytes, Bytes]): Seq[(String, KeyIndexContext)] = {
-    import indexBuilder._
-
-    val metaCtx = Await.result(storage.loadIndex(id), Duration.Inf)
-    val m = new QueryableIndex[Bytes, Bytes](metaCtx.get)(indexBuilder)
-    val metaKeys = Await.result(TestHelper.all(m.inOrder()), Duration.Inf).map { x => new String(x._1, Charsets.UTF_8) ->
-    KeyIndexContext.parseFrom(x._2)}
-
-    metaKeys
-  }
-
-  def loadIndexInOrder(ctx: IndexContext)(indexBuilder: IndexBuilder[Bytes, Bytes]): Seq[String] = {
-    import indexBuilder._
-
-    val m = new QueryableIndex[Bytes, Bytes](ctx)(indexBuilder)
-    val metaKeys = Await.result(TestHelper.all(m.inOrder()), Duration.Inf).map { x =>
-      new String(x._1, Charsets.UTF_8)
-    }
-
-    metaKeys
-  }
 
   def loadOrCreateTemporalIndex(tctx: TemporalContext)(implicit storage: Storage, ec: ExecutionContext): Future[Option[TemporalContext]] = {
     storage.loadTemporalIndex(tctx.id).flatMap {

@@ -29,12 +29,14 @@ object TestConfig {
       .endProfile()*/
       .build()
 
-  val session = CqlSession
-    .builder()
-    //.withLocalDatacenter("datacenter1")
-    .withConfigLoader(loader)
-    .withKeyspace(KEYSPACE)
-    //.withAuthCredentials(CQL_USER, CQL_PWD)
-    .build()
+  lazy val session: CqlSession = {
+    CqlSession
+      .builder()
+      //.withLocalDatacenter("datacenter1")
+      .withConfigLoader(loader)
+      .withKeyspace(KEYSPACE)
+      //.withAuthCredentials(CQL_USER, CQL_PWD)
+      .build()
+  }
 
 }

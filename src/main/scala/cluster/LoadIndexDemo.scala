@@ -1,17 +1,13 @@
 package cluster
 
-import cluster.Serializers._
+import cluster.grpc.{IndexValue, KeyIndexContext}
 import io.netty.util.internal.ThreadLocalRandom
 import org.slf4j.LoggerFactory
 import services.scalable.index.impl._
-import services.scalable.index.{Bytes, Context, DefaultComparators, DefaultIdGenerators, DefaultPrinters, DefaultSerializers, IdGenerator, IndexBuilder}
+import services.scalable.index.{DefaultComparators, DefaultIdGenerators, DefaultSerializers, IndexBuilder}
 
-import java.util.UUID
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
-import services.scalable.index.DefaultPrinters._
-import Printers._
-import cluster.grpc.KeyIndexContext
 
 object LoadIndexDemo {
 
@@ -23,15 +19,11 @@ object LoadIndexDemo {
 
   import scala.concurrent.ExecutionContext.Implicits.global
 
-  type K = Bytes
-  type V = Bytes
+  type K = String
+  type V = IndexValue
 
-  import services.scalable.index.DefaultComparators._
-
-  val NUM_LEAF_ENTRIES = 8 //rand.nextInt(5, 64)
-  val NUM_META_ENTRIES = 8 //rand.nextInt(5, 64)
-
-  import services.scalable.index.DefaultSerializers._
+  val NUM_LEAF_ENTRIES = TestHelper.NUM_LEAF_ENTRIES
+  val NUM_META_ENTRIES = TestHelper.NUM_META_ENTRIES
 
   implicit val idGenerator = DefaultIdGenerators.idGenerator
 
@@ -39,36 +31,49 @@ object LoadIndexDemo {
   //implicit val storage = new MemoryStorage()
   implicit val storage = new CassandraStorage(TestConfig.session, false)
 
-  val builder = IndexBuilder.create[K, V](DefaultComparators.bytesOrd)
+  val builder = IndexBuilder.create[K, V](DefaultComparators.ordString, DefaultSerializers.stringSerializer,
+    Serializers.indexValueSerializer)
     .storage(storage)
-    .serializer(DefaultSerializers.grpcBytesBytesSerializer)
-    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+    .serializer(Serializers.grpcStringIndexValueBytesSerializer)
+    //.keyToStringConverter(DefaultPrinters)
+    .valueToStringConverter(Printers.indexValueToString)
 
-  val clusterMetaBuilder = IndexBuilder.create[K, KeyIndexContext](DefaultComparators.bytesOrd)
+  val clusterMetaBuilder = IndexBuilder.create[K, KeyIndexContext](DefaultComparators.ordString, DefaultSerializers.stringSerializer,
+    Serializers.keyIndexSerializer)
     .storage(storage)
-    .serializer(grpcByteArrayKeyIndexContextSerializer)
-    .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+    .serializer(Serializers.grpcStringKeyIndexContextSerializer)
+    .valueToStringConverter(Printers.keyIndexContextToStringPrinter)
 
-  def loadAll(): List[String] = {
+  def loadAll(): Seq[(K, V)] = {
     val metaContext = Await.result(TestHelper.loadIndex(indexId), Duration.Inf).get
 
-    val cindex = new ClusterIndex[K, V](metaContext, 256,
-      NUM_LEAF_ENTRIES,
-      NUM_META_ENTRIES)(builder, clusterMetaBuilder)
+    val indexBuilder = IndexBuilder.create[K, V](DefaultComparators.ordString,
+      DefaultSerializers.stringSerializer, Serializers.indexValueSerializer)
+      .storage(storage)
+      .cache(cache)
+      .serializer(Serializers.grpcStringIndexValueBytesSerializer)
+      .valueToStringConverter(Printers.indexValueToString)
 
-    val ilist = cindex.inOrder().map { case (k, v, _) => k -> v }.toList.map(_._1).map { k => new String(k) }
+    val clusterMetaBuilder = IndexBuilder.create[K, KeyIndexContext](DefaultComparators.ordString,
+      DefaultSerializers.stringSerializer, Serializers.keyIndexSerializer)
+      .storage(storage)
+      .cache(cache)
+      .serializer(Serializers.grpcStringKeyIndexContextSerializer)
+      .valueToStringConverter(Printers.keyIndexContextToStringPrinter)
 
-    ilist
+    val cindex = new ClusterIndex[K, V](metaContext, metaContext.maxNItems,
+      metaContext.numLeafItems, metaContext.numMetaItems)(indexBuilder, clusterMetaBuilder)
+
+    cindex.inOrder().map{case (k, v, _) => (k, v)}
   }
 
   def main(args: Array[String]): Unit = {
-
     val indexIdBefore = s"after-$indexId"
 
-    val ilist = loadAll()
+    val ilist = loadAll().filter(_._2.valid).toList
 
-    val ldata = Helper.loadListIndex(indexIdBefore, storage.session).get.keys.map { k =>
-      new String(k.toByteArray)
+    val ldata = Helper.loadListIndex(indexIdBefore, storage.session).get.data.map { pair =>
+      builder.keySerializer.deserialize(pair.key.toByteArray) -> builder.valueSerializer.deserialize(pair.value.toByteArray)
     }.toList
 
     logger.info(s"${Console.GREEN_B}  ldata (ref) len: ${ldata.length}: ${ldata}${Console.RESET}\n")

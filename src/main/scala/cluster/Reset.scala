@@ -7,7 +7,7 @@ object Reset {
 
   def main(args: Array[String]): Unit = {
 
-    import TestConfig.session
+    val session = TestConfig.session
 
     println(session.execute("truncate table blocks;").wasApplied())
     println(session.execute("truncate table indexes;").wasApplied())
