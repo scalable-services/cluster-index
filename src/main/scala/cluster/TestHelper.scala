@@ -1,19 +1,15 @@
 package cluster
 
-import cluster.grpc.{EAVT, KeyIndexContext}
-import com.google.common.base.Charsets
-import services.scalable.index.{AsyncIndexIterator, Block, Bytes, Cache, IdGenerator, IndexBuilder, QueryableIndex, Serializer, Storage, Tuple}
 import services.scalable.index.grpc.{IndexContext, TemporalContext}
+import services.scalable.index.{AsyncIndexIterator, Storage, Tuple}
 
-import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext, Future}
-import services.scalable.index.DefaultPrinters._
+import scala.concurrent.{ExecutionContext, Future}
 
 object TestHelper {
 
   val NUM_LEAF_ENTRIES = 8 //rand.nextInt(5, 64)
   val NUM_META_ENTRIES = 8 //rand.nextInt(5, 64)
-  val MAX_ITEMS = 1024
+  val MAX_ITEMS = 128
 
   def loadOrCreateTemporalIndex(tctx: TemporalContext)(implicit storage: Storage, ec: ExecutionContext): Future[Option[TemporalContext]] = {
     storage.loadTemporalIndex(tctx.id).flatMap {

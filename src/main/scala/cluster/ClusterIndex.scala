@@ -2,10 +2,10 @@ package cluster
 
 import cluster.grpc.KeyIndexContext
 import com.google.protobuf.ByteString
-import services.scalable.index.Commands.{Insert, Update}
+import services.scalable.index.Commands.{Insert, Remove, Update}
 import services.scalable.index.Errors.IndexError
 import services.scalable.index.grpc.IndexContext
-import services.scalable.index.{AsyncIndexIterator, BatchResult, Commands, Errors, IndexBuilder, InsertionResult, QueryableIndex, Tuple, UpdateResult}
+import services.scalable.index.{AsyncIndexIterator, BatchResult, Commands, Errors, IndexBuilder, InsertionResult, QueryableIndex, RemovalResult, Tuple, UpdateResult}
 
 import java.util.UUID
 import scala.collection.concurrent.TrieMap
@@ -24,10 +24,6 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
 
   def save(clear: Boolean = true): Future[IndexContext] = {
 
-    /*val indexesToUpdate = Await.result(TestHelper.all(meta.inOrder()), Duration.Inf).map { case (k, v, lv) =>
-      v.ctxId -> (k, v, lv)
-    }.toMap*/
-
     saveIndexes().flatMap { ok =>
       //indexes.clear()
       meta.save()
@@ -45,29 +41,29 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     }).map(_.toSeq.length == indexes.size)
   }
 
-  def findPath(k: K): Future[Option[(K, QueryableIndex[K, V])]] = {
+  def findPath(k: K): Future[Option[(K, QueryableIndex[K, V], String)]] = {
     meta.findPath(k).map {
       case None => None
       case Some(leaf) =>
-        val (_, (key, kctx, _)) = leaf.findPath(k)
+        val (_, (key, kctx, vs)) = leaf.findPath(k)
 
        // val idxs = this.indexes
        // val idx = indexes(ictx.id)
 
-        if(!indexes.isDefinedAt(kctx.ctxId)){
+        if(!indexes.isDefinedAt(kctx.indexId)){
           println(s"${Console.RED_B}INDEX NOT DEFINED...${Console.RESET}")
         }
 
-        val index = indexes.get(kctx.ctxId)
+        val index = indexes.get(kctx.indexId)
           .getOrElse {
-            val index = new QueryableIndex[K, V](Await.result(storage.loadIndex(kctx.ctxId), Duration.Inf).get)(indexBuilder)
+            val index = new QueryableIndex[K, V](Await.result(storage.loadIndex(kctx.indexId), Duration.Inf).get)(indexBuilder)
 
-            indexes.put(kctx.ctxId, index)
+            indexes.put(kctx.indexId, index)
 
             index
           }
 
-        Some(key -> index)
+        Some(key, index, vs)
     }
   }
 
@@ -76,26 +72,34 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
 
     left.max().flatMap { lm =>
       meta.insert(Seq(Tuple3(lm.get._1, KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(lm.get._1)),
-        left.ctx.indexId), true)))
+        left.ctx.indexId, left.ctx.id), true)))
     }
   }
 
-  def insertMeta(left: QueryableIndex[K, V], right: QueryableIndex[K, V], last: K): Future[InsertionResult] = {
-
+  def insertMeta(left: QueryableIndex[K, V], right: QueryableIndex[K, V], last: (K, Option[String])): Future[InsertionResult] = {
     Future.sequence(Seq(left.max(), right.max())).flatMap { maxes =>
       val lm = maxes(0).get._1
       val rm = maxes(1).get._1
 
       println(s"inserting indexes in meta[2]: left ${left.ctx.indexId} right: ${right.ctx.indexId}")
 
-      meta.remove(Seq(Tuple2(last, None))).flatMap { ok =>
+      meta.remove(Seq(last)).flatMap { ok =>
         meta.insert(Seq(
           Tuple3(lm, KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(lm)),
-            left.ctx.indexId), true),
+            left.ctx.indexId, left.ctx.id), true),
           Tuple3(rm, KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(rm)),
-            right.ctx.indexId), true)
+            right.ctx.indexId, right.ctx.id), true)
         ))
       }
+    }
+  }
+
+  def removeFromMeta(left: QueryableIndex[K, V], last: (K, Option[String])): Future[RemovalResult] = {
+    println(s"removing from meta: ${last}...")
+
+    meta.remove(Seq(last)).map { res =>
+      println("ok")
+      res
     }
   }
 
@@ -106,6 +110,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     val index = new QueryableIndex[K, V](
       IndexContext()
       .withId(UUID.randomUUID().toString)
+      .withLastChangeVersion(UUID.randomUUID.toString)
       .withMaxNItems(maxNItems)
       .withNumElements(0)
       .withLevels(0)
@@ -122,7 +127,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     }
   }
 
-  def insertRange(left: QueryableIndex[K, V], list: Seq[Tuple3[K, V, Boolean]], last: K): Future[Int] = {
+  def insertRange(left: QueryableIndex[K, V], list: Seq[Tuple3[K, V, Boolean]], last: (K, Option[String])): Future[Int] = {
 
     val lindex = left.copy()
 
@@ -133,6 +138,8 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     if(remaining == 0){
       return for {
         rindex <- lindex.split().map { rindex =>
+
+          println(s"${Console.CYAN_B}splitting index ${lindex.ctx.indexId}... ${Console.RESET}")
 
           indexes.put(lindex.ctx.indexId, lindex)
 
@@ -168,12 +175,22 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       Future.sequence(Seq(lindex.max())).flatMap { maxes =>
         val lm = maxes(0).get._1
 
-        meta.remove(Seq(Tuple2(last, None))).flatMap { ok =>
-          meta.insert(Seq(
-            Tuple3(lm, KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(lm)),
-              lindex.ctx.indexId), true)
-          ))
+        val hasChanged = !indexBuilder.ord.equiv(lm, last._1)
+
+        if(hasChanged){
+
+          println(s"${Console.CYAN_B}max key has changed for index ${lindex.ctx.indexId}... from ${indexBuilder.ks(last._1)} to ${indexBuilder.ks(lm)} ${Console.RESET}")
+
+          meta.remove(Seq(last)).flatMap { ok =>
+            meta.insert(Seq(
+              Tuple3(lm, KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(lm)),
+                lindex.ctx.indexId, lindex.ctx.id), true)
+            ))
+          }
+        } else {
+          Future.successful(InsertionResult(true, 0, None))
         }
+
       }.map(_ => slice.length)
     }
   }
@@ -199,15 +216,14 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
 
           insertEmpty(list).map { n =>
             println("meta n: ", meta.ctx.num_elements)
-
             n
           }
-        case Some((last, index)) =>
+        case Some((last, index, vs)) =>
 
           val idx = list.indexWhere { case (k, _, _) => ord.gt(k, last) }
           if (idx > 0) list = list.slice(0, idx)
 
-          insertRange(index, list, last)
+          insertRange(index, list, (last, Some(vs)))
       }.flatMap { n =>
         println(s"\ninserted: ${n}\n")
         pos += n
@@ -242,7 +258,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
 
       findPath(k).flatMap {
         case None => Future.failed(Errors.KEY_NOT_FOUND(k, ks))
-        case Some((last, index)) =>
+        case Some((last, index, vs)) =>
 
           val idx = list.indexWhere { case (k, _, _) => ord.gt(k, last) }
           if (idx > 0) list = list.slice(0, idx)
@@ -267,6 +283,85 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     }
   }
 
+  def remove(data: Seq[Tuple2[K, Option[String]]])(implicit ord: Ordering[K]): Future[RemovalResult] = {
+
+    val sorted = data.sortBy(_._1)
+
+    if (sorted.exists { case (k, _) => sorted.count { case (k1, _) => ord.equiv(k, k1) } > 1 }) {
+      return Future.successful(RemovalResult(false, 0, Some(Errors.DUPLICATED_KEYS(sorted.map(_._1), ks))))
+    }
+
+    val len = sorted.length
+    var pos = 0
+
+    def remove(): Future[Int] = {
+      if (len == pos) return Future.successful(sorted.length)
+
+      var list = sorted.slice(pos, len)
+      val (k, _) = list(0)
+
+      findPath(k).flatMap {
+        case None => Future.failed(Errors.KEY_NOT_FOUND(k, ks))
+        case Some((last, index, vs)) =>
+
+          val idx = list.indexWhere { case (k, _) => ord.gt(k, last) }
+          if (idx > 0) list = list.slice(0, idx)
+
+          index.remove(list).flatMap { res =>
+
+            if (!res.success) {
+              throw res.error.get
+            } else if (index.isEmpty()) {
+
+              removeFromMeta(index, (last, Some(vs))).map { res1 =>
+
+                if (!res1.success) {
+                  throw res1.error.get
+                } else {
+
+                  println(s"${Console.CYAN_B}index ${index.ctx.indexId} is now empty! ${Console.RESET}")
+                  index.ctx.lastChangeVersion = UUID.randomUUID.toString
+
+                  res
+                }
+
+              }
+
+            } else {
+
+              index.max().map { max =>
+                val hasChanged = !indexBuilder.ord.equiv(max.get._1, last)
+
+                if(hasChanged){
+                  println(s"${Console.CYAN_B}max key has changed: ${index.ctx.indexId} from ${indexBuilder.ks(last)} to ${indexBuilder.ks(max.get._1)}${Console.RESET}")
+                  index.ctx.lastChangeVersion = UUID.randomUUID.toString
+                }
+
+                res
+              }
+
+            }
+
+          }
+      }.flatMap { res =>
+
+        if (!res.success) {
+          throw res.error.get
+        } else {
+          pos += res.n
+          remove()
+        }
+      }
+    }
+
+    remove().map { n =>
+      RemovalResult(true, n)
+    }.recover {
+      case t: IndexError => RemovalResult(false, 0, Some(t))
+      case t: Throwable => throw t
+    }
+  }
+
   def execute(cmds: Seq[Commands.Command[K, V]]): Future[BatchResult] = {
 
     def process(pos: Int, error: Option[Throwable]): Future[BatchResult] = {
@@ -283,15 +378,11 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
       (cmd match {
         case cmd: Insert[K, V] => insert(cmd.list)
         case cmd: Update[K, V] => update(cmd.list)
+        case cmd: Remove[K, V] => remove(cmd.keys)
       }).flatMap(prev => process(pos + 1, prev.error))
     }
 
-    process(0, None).map { r =>
-
-      println(s"batch result: ${r}")
-
-      r
-    }
+    process(0, None)
   }
 
   def all[K, V](it: AsyncIndexIterator[Seq[Tuple[K, V]]])(implicit ec: ExecutionContext): Future[Seq[Tuple[K, V]]] = {
@@ -311,7 +402,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
     println(s"${Console.CYAN_B}meta keys: ${iter.map(x => indexBuilder.ks(x._1))}${Console.RESET}")
 
     iter.map { case (k, link, version) =>
-      val ctx = Await.result(storage.loadIndex(link.ctxId), Duration.Inf).get
+      val ctx = Await.result(storage.loadIndex(link.indexId), Duration.Inf).get
 
       //println(s"range n: ${ctx.numElements}")
       val index = new QueryableIndex[K, V](ctx)(indexBuilder)
@@ -330,7 +421,7 @@ class ClusterIndex[K, V](val metaContext: IndexContext,
 
     iter.map { case (k, link, version) =>
 
-      val ctx = Await.result(storage.loadIndex(link.ctxId), Duration.Inf).get
+      val ctx = Await.result(storage.loadIndex(link.indexId), Duration.Inf).get
 
       val link2 = Await.result(storage.loadIndex(ctx.id), Duration.Inf).get
       val r = Await.result(all(new QueryableIndex[K, V](link2)(indexBuilder).inOrder()), Duration.Inf)
@@ -358,6 +449,7 @@ object ClusterIndex {
       .withLevels(0)
       .withNumLeafItems(numLeafItems)
       .withNumMetaItems(numMetaItems)
+      .withLastChangeVersion(UUID.randomUUID.toString)
 
     val metaRange = new QueryableIndex[K, KeyIndexContext](metaCtx)(clusterMetaBuilder)
 
@@ -369,7 +461,8 @@ object ClusterIndex {
       maxRangeK <- rangeIndex.max().map(_.get).map(_._1)
 
       n <- metaRange.insert(Seq(
-        Tuple3(maxRangeK, KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(maxRangeK)), rangeCtx.id), true)
+        Tuple3(maxRangeK, KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(maxRangeK)), rangeCtx.id,
+          rangeCtx.lastChangeVersion), true)
       ))
 
     } yield {

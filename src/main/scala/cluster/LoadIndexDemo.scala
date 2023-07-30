@@ -70,7 +70,7 @@ object LoadIndexDemo {
   def main(args: Array[String]): Unit = {
     val indexIdBefore = s"after-$indexId"
 
-    val ilist = loadAll().filter(_._2.valid).toList
+    val ilist = loadAll()/*.filter(_._2.valid)*/.toList
 
     val ldata = Helper.loadListIndex(indexIdBefore, storage.session).get.data.map { pair =>
       builder.keySerializer.deserialize(pair.key.toByteArray) -> builder.valueSerializer.deserialize(pair.value.toByteArray)

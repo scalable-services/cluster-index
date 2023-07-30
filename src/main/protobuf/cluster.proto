@@ -18,6 +18,12 @@ message UpdateCommand {
     repeated services.scalable.index.grpc.KVPair list = 1;
 }
 
+message RemoveCommand {
+    option (scalapb.message).extends = "services.scalable.index.grpc.IndexCommand";
+
+    repeated services.scalable.index.grpc.KVPair list = 1;
+}
+
 option (scalapb.options) = {
     single_file: true
     flat_package: true
@@ -29,7 +35,8 @@ message KeyIndexContext {
     option (scalapb.message).extends = "cluster.grpc.ClusterIndexCommand";
 
     bytes key = 1;
-    string ctxId = 2;
+    string indexId = 2;
+    string lastChangeVersion = 3;
     //services.scalable.index.grpc.IndexContext ctx = 2 [(scalapb.field).no_box = true];
 }
 
@@ -47,6 +54,8 @@ message RangeTask {
     string id = 1;
     repeated InsertCommand insertions = 2;
     repeated UpdateCommand updates = 3;
+    repeated RemoveCommand removals = 4;
+    string lastChangeVersion = 5;
 }
 
 message IndexValue {

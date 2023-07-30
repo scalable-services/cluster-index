@@ -7,8 +7,9 @@ import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
 import services.scalable.index.grpc.{IndexContext, KVPair}
 import services.scalable.index.impl.{CassandraStorage, DefaultCache}
-import services.scalable.index.{Bytes, Commands, DefaultComparators, DefaultIdGenerators, DefaultSerializers, IndexBuilder}
+import services.scalable.index.{Bytes, Commands, DefaultComparators, DefaultIdGenerators, DefaultSerializers, IndexBuilder, QueryableIndex}
 import com.google.protobuf.any.Any
+
 import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
 import scala.concurrent.Await
@@ -29,7 +30,7 @@ object Main {
     val indexId = TestConfig.CLUSTER_INDEX_NAME //UUID.randomUUID().toString
 
     implicit val idGenerator = DefaultIdGenerators.idGenerator
-    implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 80000)
+    implicit val cache = new DefaultCache(MAX_PARENT_ENTRIES = 8000)
     //implicit val storage = new MemoryStorage()
     implicit val storage = new CassandraStorage(TestConfig.session, false)
 
@@ -96,7 +97,7 @@ object Main {
       Commands.Insert(indexId, list)
     }
 
-    val insertCommands = insert(1000)
+    val insertCommands = insert(2000)
 
     val context = Await.result(cindex.execute(Seq(insertCommands)).flatMap(_ => cindex.save()), Duration.Inf)
 
@@ -115,7 +116,7 @@ object Main {
 
       var list = Seq.empty[Tuple3[K, V, Boolean]]
 
-      val n = 100//rand.nextInt(100, 1000)
+      val n = 1700//rand.nextInt(100, 1000)
       val time = System.nanoTime()
 
       for (i <- 0 until n) {
@@ -168,25 +169,30 @@ object Main {
       Seq(Commands.Update(indexId, updates))
     }
 
-    def remove(filterOut: Seq[K] = Seq.empty[K]): Seq[Commands.Command[K, V]] = {
+    def remove(filterOut: Seq[K] = Seq.empty[K], removeAll: Boolean = false): Seq[Commands.Command[K, V]] = {
       val time = System.nanoTime()
 
-      val n = if (data.length >= 2) rand.nextInt(1, data.length) else 1
+      //val n = if (data.length >= 2) rand.nextInt(1, data.length) else 1
+      val n = data.length/3
 
-      val list = scala.util.Random.shuffle(data.filter(_._2.valid)).slice(0, n)
+      val list = if(!removeAll) scala.util.Random.shuffle(data.filter(_._2.valid)).slice(0, n)
         .filterNot{case (k, _, _) => filterOut.exists{ordering.equiv(_, k)}}
-        .map { case (k, v, lv) =>
-        (k, v.withTmp(time).withValid(false), Some(lv))
-      }
+        .map { case (k, _, lv) =>
+          (k, Some(lv))
+        }
+      else
+        data.filter(_._2.valid) map { case (k, _, lv) =>
+          (k, Some(lv))
+        }
 
       if(list.isEmpty) return Seq.empty[Commands.Command[K, V]]
 
       println(s"remove size: ${list.length}")
-      println(s"removals: ${list.map{case (k, v, _) => indexBuilder.ks(k) -> indexBuilder.vs(v)}}")
+      println(s"removals: ${list.map{case (k, _) => indexBuilder.ks(k)}}")
 
-      data = data.filterNot{case (k, _, _) => list.exists{case (k1, _, _) => ordering.equiv(k, k1)}}
+      data = data.filterNot{case (k, _, _) => list.exists{case (k1, _) => ordering.equiv(k, k1)}}
 
-      Seq(Commands.Update[K, V](indexId, list))
+      Seq(Commands.Remove[K, V](indexId, list))
     }
 
     val updateList = update()
@@ -194,6 +200,9 @@ object Main {
     val insertList = insert2()
 
     val commands = updateList ++ removeList ++ insertList
+
+    /*val removeList = remove(removeAll = true)
+    val commands = removeList*/
 
     /*Await.result(cindex.execute(commands).flatMap(_ => cindex.save()), Duration.Inf)
 
@@ -210,7 +219,7 @@ object Main {
 
     val mappedCmds = Await.result(cc.execute(commands), Duration.Inf)
 
-    val sendCmds = mappedCmds.map { case (range, cmds) =>
+    val sendCmds = mappedCmds.map { case (range, (lastCV, cmds)) =>
       val insertions = cmds.filter(_.isInstanceOf[Commands.Insert[K, V]])
         .map(_.asInstanceOf[Commands.Insert[K, V]]).map { c =>
         InsertCommand(c.list.map { case (k, v, _) =>
@@ -224,7 +233,26 @@ object Main {
         })
       }
 
-      RangeTask(range, insertions, updates)
+      val removals = cmds.filter(_.isInstanceOf[Commands.Remove[K, V]]).map(_.asInstanceOf[Commands.Remove[K, V]]).map { c =>
+        RemoveCommand(c.keys.map { case (k, ls) =>
+          KVPair(ByteString.copyFrom(indexBuilder.keySerializer.serialize(k)), ByteString.copyFrom(EMPTY_BYTES), ls.get)
+        })
+      }
+
+      //val cr = ClusterIndex.fromRange[K, V](range, TestHelper.NUM_LEAF_ENTRIES, TestHelper.NUM_META_ENTRIES)(indexBuilder, clusterMetaBuilder)
+
+      val rangeCtx = Await.result(storage.loadIndex(range).map(_.get), Duration.Inf)
+      val rangeIndex = new QueryableIndex[K, V](rangeCtx)(indexBuilder)
+
+      val list = Await.result(TestHelper.all(rangeIndex.inOrder()), Duration.Inf)
+
+      if(!updates.isEmpty && list.length + updates.head.list.length >= TestHelper.MAX_ITEMS)
+        println(s"${Console.YELLOW_B}updates at ${range} len: ${list.length} update length: ${updates.head.list.length}${Console.RESET} after length: ${list.length + updates.head.list.length}")
+
+      if(!removals.isEmpty && list.length - removals.head.list.length == 0)
+        println(s"${Console.YELLOW_B}removals at ${range} len: ${list.length} removal length: ${removals.head.list.length}${Console.RESET} after length: ${list.length - removals.head.list.length}")
+
+      RangeTask(range, insertions, updates, removals, lastCV)
     }.toSeq
 
     val done = Await.result(cc.sendTasks(sendCmds), Duration.Inf)
@@ -236,7 +264,7 @@ object Main {
       cindexFromDisk.save()
     }, Duration.Inf)
 
-    val brList = cindexFromDisk.inOrder().filter(_._2.valid)
+    val brList = cindexFromDisk.inOrder()
 
     val dontMatch = listIndex.zipWithIndex.filterNot{case (k, i) => brList(i)._1 == k._1 && Comparators.indexValueOrd.equiv(brList(i)._2, k._2)}
     val matches = TestHelper.isColEqual(listIndex.toList, brList.toList)(ordering, Comparators.indexValueOrd)

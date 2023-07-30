@@ -3,7 +3,7 @@ package cluster
 import cluster.grpc._
 import com.google.protobuf.ByteString
 import com.google.protobuf.any.Any
-import io.vertx.core.Vertx
+import io.vertx.core.{Vertx, VertxOptions}
 import io.vertx.kafka.client.consumer.{KafkaConsumer, KafkaConsumerRecords}
 import io.vertx.kafka.client.producer.{KafkaProducer, KafkaProducerRecord}
 import org.slf4j.LoggerFactory
@@ -23,7 +23,10 @@ class RangeTaskWorker[K, V](val id: String)(val indexBuilder: IndexBuilder[K, V]
 
   val logger = LoggerFactory.getLogger(this.getClass)
 
-  val vertx = Vertx.vertx()
+  val voptions = new VertxOptions()
+  voptions.setBlockedThreadCheckInterval(1000000L)
+  val vertx = Vertx.vertx(voptions)
+
   val consumerSettings = new util.HashMap[String, String]()
 
   consumerSettings.put("bootstrap.servers", "localhost:9092")
@@ -86,7 +89,7 @@ class RangeTaskWorker[K, V](val id: String)(val indexBuilder: IndexBuilder[K, V]
 
   def execute(task: RangeTask): Future[Boolean] = {
 
-    logger.info(s"\n${Console.MAGENTA_B}range task for ${task.id}${Console.RESET}\n")
+    logger.info(s"\n${Console.YELLOW_B}range task for ${task.id}${Console.RESET}\n")
 
     val insertions = task.insertions.map { c =>
       Commands.Insert(task.id, c.list.map { case kp =>
@@ -102,55 +105,101 @@ class RangeTaskWorker[K, V](val id: String)(val indexBuilder: IndexBuilder[K, V]
       })
     }
 
-    val rangeCmds: Seq[Commands.Command[K, V]] = insertions ++ updates
+    val removals = task.removals.map { c =>
+      Commands.Remove[K, V](task.id, c.list.map { case kp =>
+        Tuple2(indexBuilder.keySerializer.deserialize(kp.key.toByteArray), Some(kp.version))
+      })
+    }
+
+    // This order must be mantained...
+    val rangeCmds: Seq[Commands.Command[K, V]] = updates ++ insertions ++ removals
+
+    def actionAfterExecution(metaCR: ClusterIndex[K, V], maxRangeK: K): Future[Boolean] = {
+
+      def removeFromMeta(): Future[Boolean] = {
+        val metaTask = MetaTask("meta")
+          .withRemoveRanges(Seq(ByteString.copyFrom(indexBuilder.keySerializer.serialize(maxRangeK))))
+
+        println(s"${Console.RED_B}SENDING REMOVAL META TASK ${task.id}${Console.RESET}")
+
+        sendTasks(Seq(metaTask))
+      }
+
+      def updateOrInsertMeta(metaAfter: Seq[(K, KeyIndexContext, String)]): Future[Boolean] = {
+
+        val idx = metaCR.indexes.find{x => x._2.ctx.indexId == task.id}.get._2
+        val indexVersion = idx.ctx.lastChangeVersion
+        val hasChanged = task.lastChangeVersion.compareTo(indexVersion) != 0
+
+        // assert(!hasChanged, s"Index structure has changed! task version: ${task.lastChangeVersion} index version: ${indexVersion}")
+
+        if (hasChanged) {
+          println(s"\n\n${Console.RED_B}Index structure for ${task.id} has changed! task version: ${task.lastChangeVersion} index version: ${indexVersion}${Console.RESET}\n\n")
+        }
+
+        //val maxRangeKAfter = metaAfter.head._1
+
+        val newRanges = metaAfter.length > 1
+
+        if (hasChanged || newRanges) {
+          val metaTask = MetaTask("meta")
+            .withRemoveRanges(Seq(ByteString.copyFrom(indexBuilder.keySerializer.serialize(maxRangeK))))
+            .withInsertRanges(metaAfter.map { case (k, c, _) =>
+              KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(k)), c.indexId)
+            })
+
+          println(s"${Console.MAGENTA_B}SENDING UPDATE/INSERT META TASK ${task.id}${Console.RESET}")
+
+          return sendTasks(Seq(metaTask))
+        }
+
+        //val nctx = idx.snapshot().withId(task.id)
+        //idx.ctx = Context.fromIndexContext[K, V](nctx)(indexBuilder)
+
+        println(s"${Console.GREEN_B}NORMAL OPERATIONS on ${task.id}${Console.RESET}")
+
+        Future.successful(true)
+      }
+
+      TestHelper.all(metaCR.meta.inOrder()).flatMap { list =>
+        if(list.isEmpty){
+          removeFromMeta()
+        } else {
+          updateOrInsertMeta(list)
+        }
+      }
+    }
+
+    def checkVersions(metaCR: ClusterIndex[K, V]): Future[Boolean] = {
+      val idx = metaCR.indexes.head._2
+      val indexVersion = idx.ctx.lastChangeVersion
+      val hasChanged = task.lastChangeVersion.compareTo(indexVersion) != 0
+
+      // assert(!hasChanged, s"Index structure has changed! task version: ${task.lastChangeVersion} index version: ${indexVersion}")
+
+      // It does not change when running a simulation with only one transaction because each range is only accessed once...
+      if (hasChanged) {
+        println(s"\n\n${Console.RED_B}Index structure has changed! task version: ${task.lastChangeVersion} index version: ${indexVersion}${Console.RESET}\n\n")
+        System.exit(1)
+      }
+
+      Future.successful(true)
+    }
 
     for {
       (maxRangeK, metaCR) <- ClusterIndex.fromRange[K, V](task.id, TestHelper.NUM_LEAF_ENTRIES,
         TestHelper.NUM_META_ENTRIES)(indexBuilder, clusterIndexBuilder)
+
+      _ <- checkVersions(metaCR)
 
       n <- metaCR.execute(rangeCmds).map { r =>
         if(r.error.isDefined) throw r.error.get
         r
       }
       ok <- metaCR.saveIndexes(false)
-
-      metaAfter <- TestHelper.all(metaCR.meta.inOrder())
-
-      maxRangeKAfter = metaAfter.head._1
-      //val rangeCtxAfter = metaAfter.head._2
-
-      firstChanged = !indexBuilder.ord.equiv(maxRangeK, maxRangeKAfter)
-      newRanges = metaAfter.length > 1
-
-      result <- if (firstChanged || newRanges) {
-        var metaTask = MetaTask("meta")
-
-        metaTask = metaTask
-          .withRemoveRanges(Seq(ByteString.copyFrom(indexBuilder.keySerializer.serialize(maxRangeK))))
-          .withInsertRanges(metaAfter.map { case (k, c, _) =>
-            KeyIndexContext(ByteString.copyFrom(indexBuilder.keySerializer.serialize(k)), c.ctxId)
-          })
-
-        println(s"${Console.RED_B}SENDING META TASK ${task.id}${Console.RESET}")
-
-        sendTasks(Seq(metaTask))
-      } else {
-
-        //val idx = metaCR.indexes.find { case (id, _) => task.id != id }.get._2
-        val idx = metaCR.indexes.head._2
-
-        val nctx = idx.snapshot().withId(task.id)
-        idx.ctx = Context.fromIndexContext[K, V](nctx)(indexBuilder)
-
-        idx.save().map { _ =>
-          println(s"${Console.GREEN_B}NORMAL INSERTION on ${task.id}${Console.RESET}")
-          true
-        }
-
-      }
-
+      result <- actionAfterExecution(metaCR, maxRangeK)
     } yield {
-      result
+      true
     }
   }
 

@@ -50,12 +50,12 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
     meta.findPath(k).map {
       case None => None
       case Some(leaf) => Some(leaf.findPath(k)._2).map { x =>
-        (x._1, Await.result(storage.loadIndex(x._2.ctxId), Duration.Inf).get, x._3)
+        (x._1, Await.result(storage.loadIndex(x._2.indexId), Duration.Inf).get, x._3)
       }
     }
   }
 
-  def sliceInsertion(c: Commands.Insert[K, V])(ranges: TrieMap[String, Seq[Commands.Command[K, V]]]): Future[Int] = {
+  def sliceInsertion(c: Commands.Insert[K, V])(ranges: TrieMap[String, (String, Seq[Commands.Command[K, V]])]): Future[Int] = {
     val sorted = c.list.sortBy(_._1)
 
     val len = sorted.length
@@ -85,8 +85,8 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
           val c = Commands.Insert[K, V](dbCtx.id, list)
 
           ranges.get(dbCtx.id) match {
-            case None => ranges.put(dbCtx.id, Seq(c))
-            case Some(cmdList) => ranges.update(dbCtx.id, cmdList :+ c)
+            case None => ranges.put(dbCtx.id, dbCtx.lastChangeVersion -> Seq(c))
+            case Some((lastCV, cmdList)) => ranges.update(dbCtx.id, lastCV -> (cmdList :+ c))
           }
 
           list.length
@@ -101,7 +101,7 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
     insert(0)
   }
 
-  def sliceRemoval(c: Commands.Remove[K, V])(ranges: TrieMap[String, Seq[Commands.Command[K, V]]]): Future[Int] = {
+  def sliceRemoval(c: Commands.Remove[K, V])(ranges: TrieMap[String, (String, Seq[Commands.Command[K, V]])]): Future[Int] = {
     val sorted = c.keys.sorted
 
     val len = sorted.length
@@ -125,8 +125,8 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
           val c = Commands.Remove[K, V]("main", list)
 
           ranges.get(leafId.id) match {
-            case None => ranges.put(leafId.id, Seq(c))
-            case Some(cmdList) => ranges.update(leafId.id, cmdList :+ c)
+            case None => ranges.put(leafId.id, leafId.lastChangeVersion -> Seq(c))
+            case Some((lastCV, cmdList)) => ranges.update(leafId.id, lastCV -> (cmdList :+ c))
           }
 
           list.length
@@ -139,7 +139,7 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
     remove()
   }
 
-  def sliceUpdate(c: Commands.Update[K, V])(ranges: TrieMap[String, Seq[Commands.Command[K, V]]]): Future[Int] = {
+  def sliceUpdate(c: Commands.Update[K, V])(ranges: TrieMap[String, (String, Seq[Commands.Command[K, V]])]): Future[Int] = {
     val sorted = c.list.sortBy(_._1)
 
     val len = sorted.length
@@ -165,8 +165,8 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
           val c = Commands.Update[K, V]("main", list)
 
           ranges.get(leafId.id) match {
-            case None => ranges.put(leafId.id, Seq(c))
-            case Some(cmdList) => ranges.update(leafId.id, cmdList :+ c)
+            case None => ranges.put(leafId.id, leafId.lastChangeVersion -> Seq(c))
+            case Some((lastCV, cmdList)) => ranges.update(leafId.id, lastCV -> (cmdList :+ c))
           }
 
           list.length
@@ -179,8 +179,10 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
     update()
   }
 
-  def execute(commands: Seq[Commands.Command[K, V]]): Future[TrieMap[String, Seq[Commands.Command[K, V]]]] = {
-    val ranges = TrieMap.empty[String, Seq[Commands.Command[K, V]]]
+  def execute(commands: Seq[Commands.Command[K, V]]): Future[TrieMap[String, (String, Seq[Commands.Command[K, V]])]] = {
+    val ranges = TrieMap.empty[String, (String, Seq[Commands.Command[K, V]])]
+
+    // Validate commands: no same key in 2 operations or more... (any combinations of it)
 
     /*Future.sequence(commands.map {
       case c: Commands.Insert[K, V] => sliceInsertion(c)(ranges)
@@ -190,12 +192,10 @@ class ClusterClient[K, V](metaCtx: IndexContext)(val metaBuilder: IndexBuilder[K
       ranges.toMap
     }*/
 
-    //sliceInsertion(commands.head.asInstanceOf[Commands.Insert[K, V]])(ranges).map(_ => ranges)
-
     commands.foreach {
       case c: Commands.Insert[K, V] => Await.result(sliceInsertion(c)(ranges), Duration.Inf)
       case c: Commands.Update[K, V] => Await.result(sliceUpdate(c)(ranges), Duration.Inf)
-      //case c: Commands.Update[K, V] => sliceUpdate(c)(ranges)
+      case c: Commands.Remove[K, V] => Await.result(sliceRemoval(c)(ranges), Duration.Inf)
     }
 
     Future.successful(ranges)
