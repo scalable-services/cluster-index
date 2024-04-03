@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package services.scalable.index.cluster.grpc;
+
+import "index.proto";
+import "scalapb/scalapb.proto";
+
+option (scalapb.options) = {
+    single_file: true
+    flat_package: true
+    preserve_unknown_fields: false
+};
+
+message ClusterIndexContext {
+    services.scalable.index.grpc.IndexContext metaCtx = 1;
+    int64 rqnge_max_items = 2;
+}
+
+message KeyIndexContext {
+    bytes key = 1;
+    string rangeId = 2;
+    string lastChangeVersion = 3;
+}
+
+message RangeIndexMeta {
+    string id = 1;
+    repeated services.scalable.index.grpc.KVPair data = 2;
+    string lastChangeVersion = 3;
+    uint32 order = 4;
+    uint32 MIN = 5;
+    uint32 MAX = 6;
+}

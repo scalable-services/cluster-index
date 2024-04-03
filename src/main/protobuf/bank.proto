@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package services.scalable.index.cluster.grpc;
+
+import "scalapb/scalapb.proto";
+
+option (scalapb.options) = {
+    single_file: true
+    flat_package: true
+    preserve_unknown_fields: false
+};
+
+message BankAccount {
+    string id = 1;
+    int64 balance = 2;
+    string lastVersion = 3;
+}
