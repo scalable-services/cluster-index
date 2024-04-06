@@ -177,7 +177,7 @@ class RangeSpec extends Repeatable with Matchers {
 
     assert(dataSorted == rangeDataFromStorage)
 
-    if(rangeFromStorage.hasEnough()){
+    if(rangeFromStorage.getNumElements() > rangeFromStorage.getMaxElements()/2){
       val right = Await.result(rangeFromStorage.split(), Duration.Inf)
 
       val leftHalf = Await.result(rangeFromStorage.inOrder(), Duration.Inf).map{case (k, v, vs) => (k, v)}

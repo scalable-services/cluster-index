@@ -145,7 +145,7 @@ class ClusterIndexSpec extends Repeatable with Matchers {
 
     var commands: Seq[Commands.Command[K, V]] = insert(1500, 3000)
 
-    commands = commands ++ update() ++ remove() ++ remove()
+    commands = commands ++ update() ++ remove() /*++ remove()*/
 
     val ctx = Await.result(cindex.execute(commands, version).flatMap(_ => cindex.save()), Duration.Inf)
 

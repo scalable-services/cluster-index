@@ -69,22 +69,26 @@ class RangeIndex[K, V](protected var meta: IndexContext)(implicit val builder: I
     }
   }
 
-  def size(): Long = ctx.num_elements
+  def size(): Long = getNumElements()
 
   def isFull(): Boolean = {
-    ctx.num_elements >= builder.MAX_N_ITEMS
+    getNumElements() >= builder.MAX_N_ITEMS
   }
 
   def hasMinimum(): Boolean = {
-    ctx.num_elements >= ctx.LEAF_MIN
+    getNumElements() >= builder.MAX_N_ITEMS/2
   }
 
-  def hasEnough(): Boolean = {
+  /*def hasEnough(): Boolean = {
     ctx.num_elements > ctx.LEAF_MIN
-  }
+  }*/
+
+  def minNeeded(): Long = builder.MAX_N_ITEMS/2 - getNumElements()
+
+  def canBorrowTo(target: RangeIndex[K,V]): Boolean = getNumElements() - target.minNeeded() >= builder.MAX_N_ITEMS/2
 
   def isEmpty(): Boolean = {
-    ctx.num_elements == 0
+    getNumElements() == 0
   }
 
   def inOrder(): Future[Seq[(K, V, String)]] = {
@@ -92,6 +96,13 @@ class RangeIndex[K, V](protected var meta: IndexContext)(implicit val builder: I
       case None => Seq.empty[(K, V, String)]
       case Some(leaf) => leaf.asInstanceOf[Leaf[K, V]].inOrder()
     }
+  }
+
+  def inOrderSync(): Seq[(K, V, String)] = {
+    Await.result(ctx.getRoot().map {
+      case None => Seq.empty[(K, V, String)]
+      case Some(leaf) => leaf.asInstanceOf[Leaf[K, V]].inOrder()
+    }, Duration.Inf)
   }
 
   def split(): Future[RangeIndex[K, V]] = {
@@ -136,6 +147,7 @@ class RangeIndex[K, V](protected var meta: IndexContext)(implicit val builder: I
       ctx.root = Some(merged.unique_id)
       ctx.levels = 0
       ctx.lastChangeVersion = UUID.randomUUID().toString
+      ctx.num_elements = merged.length
 
       this
     }
@@ -198,7 +210,7 @@ class RangeIndex[K, V](protected var meta: IndexContext)(implicit val builder: I
   }
 
   def getMaxElements(): Long = {
-    MAX_N_ITEMS
+    builder.MAX_N_ITEMS
   }
 
   def getNumElements(): Long = {

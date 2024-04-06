@@ -297,6 +297,9 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
 
     def updateMeta(borrowingRange: RangeIndex[K, V], borrowingMaxKey: K, borrowingVs: String,
                    range: RangeIndex[K, V], last: K, version: String): Future[Boolean] = {
+
+      println(s"borrowing range len ${borrowingRange.getNumElements()} canBorrow: ${borrowingRange.canBorrowTo(range)} range len: ${range.getNumElements()}")
+
       for {
         maxNext <- borrowingRange.max().map(_.get)
         maxTarget <- range.max().map(_.get)
@@ -320,6 +323,14 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
             ranges.put(borrowingRange.getId(), borrowingRange)
             ranges.put(range.getId(), range)
 
+            if(!borrowingRange.hasMinimum()){
+              println()
+            }
+
+            if(!range.hasMinimum()){
+              println()
+            }
+
             rs.success
           }
         }
@@ -331,8 +342,14 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
     def merge(leftRange: Option[(RangeIndex[K, V], K, String)],
               rightRange: Option[(RangeIndex[K, V], K, String)]): Future[Boolean] = {
       (leftRange, rightRange) match {
-        case (None, Some((rightR, nextK, nextVs))) => range.merge(rightR, txVersion).flatMap { merged =>
-          merged.max().map(_.get).flatMap { maxMerged =>
+        case (None, Some((rightR, nextK, nextVs))) =>
+          println(s"rightR len: ${rightR.getNumElements()}/${rightR.inOrderSync().length} rangelen: ${range.getNumElements()}/${range.inOrderSync().length} ")
+
+          val rangeN = range.getNumElements()
+          val rightN = rightR.getNumElements()
+
+          range.merge(rightR, txVersion).flatMap { merged =>
+           merged.max().map(_.get).flatMap { maxMerged =>
             meta.execute(Seq(
               Commands.Remove[K, KeyIndexContext](metaContext.id, Seq(
                 last -> Some(rangeVersion),
@@ -349,6 +366,13 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
               ranges.remove(rightR.getId())
               ranges.remove(range.getId())
               ranges.put(merged.getId(), merged)
+
+              assert(merged.getNumElements() == (rangeN + rightN))
+
+              if(!merged.hasMinimum()){
+                println(merged.getNumElements(), merged.inOrderSync().length)
+                println()
+              }
 
               rs.success
             }
@@ -373,6 +397,11 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
               ranges.remove(range.getId())
               ranges.put(merged.getId(), merged)
 
+              if(!merged.hasMinimum()){
+                println(merged.getNumElements(), merged.inOrderSync().length)
+                println()
+              }
+
               rs.success
             }
           }
@@ -395,6 +424,11 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
               ranges.remove(leftR.getId())
               ranges.remove(range.getId())
               ranges.put(merged.getId(), merged)
+
+              if(!merged.hasMinimum()){
+                println(merged.getNumElements(), merged.inOrderSync().length)
+                println()
+              }
 
               rs.success
             }
@@ -426,6 +460,8 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
 
             ), txVersion).map { rs =>
 
+              println(s"min rangeid: ${range.getId()}")
+
               ranges.put(range.getId(), range)
 
               rs.success
@@ -436,9 +472,15 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
 
     def borrowFromRight(rightRange: RangeIndex[K, V], nextK: K, nextVs: String,
                         leftRange: Option[(RangeIndex[K, V], K, String)]): Future[Boolean] = {
-      if(!rightRange.hasEnough()) return merge(leftRange, Some(rightRange, nextK, nextVs))
+      if(!rightRange.canBorrowTo(range)) return merge(leftRange, Some(rightRange, nextK, nextVs))
+
+      assert(rightRange.inOrderSync().length >= rightRange.getMaxElements()/2)
+
+      val resultingLen = rightRange.getNumElements() - range.minNeeded()
+      val rangeBefore = range.getNumElements()
 
       rightRange.borrowRight(range).map(_.get).flatMap { range =>
+        println(s"borrow from right... resultingLen: ${resultingLen} actual len: ${range.getNumElements()} range before: ${rangeBefore}")
         updateMeta(rightRange, nextK, nextVs, range, last, rangeVersion)
       }
     }
@@ -459,9 +501,18 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
     }
 
     def borrowFromLeft(leftRange: RangeIndex[K, V], prevK: K, prevVs: String): Future[Boolean] = {
-      if(!leftRange.hasEnough()) return borrowFromRight2(Some(leftRange, prevK, prevVs))
+      if(!leftRange.canBorrowTo(range)) return borrowFromRight2(Some(leftRange, prevK, prevVs))
+
+      val cp = leftRange.getNumElements()
+      val minNeeded = range.minNeeded()
+      val resultingLen = leftRange.getNumElements() - minNeeded
+      val rangeBefore = range.getNumElements()
+
+      assert(leftRange.inOrderSync().length >= leftRange.getMaxElements()/2)
 
       leftRange.borrowLeft(range).map(_.get).flatMap { range =>
+        println(s"borrow from left... capacity ${cp} resultingLen: ${resultingLen} actual len: ${range.getNumElements()} range before: ${rangeBefore} range needed: ${minNeeded}")
+
         updateMeta(leftRange, prevK, prevVs, range, last, rangeVersion)
       }
     }
@@ -469,6 +520,13 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
     meta.previousKey(last)(ord).flatMap {
       case None => borrowFromRight2(None)
       case Some((prevK, prevCtx, prevVs)) =>
+
+        if(ord.equiv(prevK, last)){
+          println()
+        }
+
+        assert(!ord.equiv(prevK, last))
+
         val leftRangeOpt = ranges.get(prevCtx.rangeId)
 
         if(leftRangeOpt.isDefined){
@@ -524,6 +582,8 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
             all.exists{case (k1, _, _) => ord.equiv(k, k1)}
           }
 
+          all
+
           copy.execute(Seq(Commands.Remove[K, V](metaContext.id, list)), version).flatMap { result =>
             rangeData
             notmissingCopy
@@ -541,8 +601,10 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
               assert(result.success, result.error.get)
 
               if(copy.hasMinimum()) {
+                ranges.put(copy.getId(), copy)
                 Future.successful(Tuple3(result, copy, list.length))
               } else {
+                println(s"before entering: has min: ${copy.hasMinimum()}  sync size ${copy.inOrderSync().length} len: ${copy.getNumElements()}")
                 borrow(copy, last, vs, version).map(_ => Tuple3(result, copy, list.length))
               }
             }
@@ -612,9 +674,11 @@ class ClusterIndex[K, V](val metaContext: IndexContext)
         case Some(range) => range
       }
 
+      assert(range.hasMinimum())
+
       val list = Await.result(range.inOrder(), Duration.Inf)
 
-      println(s"range id ${range.getId()} hasminimum: ${range.hasMinimum()} minimum: ${range.getMaxElements()/2} len: ${range.getNumElements()} [${k}] => ${list.map(_._1)}")
+      println(s"range id ${range.getId()} hasminimum: ${range.hasMinimum()} meta len: ${iter.length} minimum: ${range.getMaxElements()/2} len: ${range.getNumElements()} [${k}] => ${list.map(_._1)}")
 
       list
     }.flatten
