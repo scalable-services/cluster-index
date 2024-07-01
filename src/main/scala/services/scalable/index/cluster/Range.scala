@@ -1,8 +1,9 @@
 package services.scalable.index.cluster
 
 import services.scalable.index.Commands.{Command, Insert, Remove, Update}
-import services.scalable.index.{BatchResult, Context, IndexBuilt, InsertionResult, Leaf}
+import services.scalable.index.{Context, IndexBuilt, Leaf}
 import services.scalable.index.grpc.{IndexContext, RootRef}
+import ClusterResult._
 
 import java.util.UUID
 import scala.concurrent.Future
@@ -79,25 +80,25 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
 
   def execute(cmds: Seq[Command[K, V]], version: String = ctx.id): Future[BatchResult] = {
 
-    def process(pos: Int, error: Option[Throwable]): Future[BatchResult] = {
+    def process(pos: Int, error: Option[Throwable], n: Int): Future[BatchResult] = {
       if(error.isDefined) {
         return Future.successful(BatchResult(false, error))
       }
 
       if(pos == cmds.length) {
-        return Future.successful(BatchResult(true))
+        return Future.successful(BatchResult(true, None, n))
       }
 
       val cmd = cmds(pos)
 
       (cmd match {
-        case cmd: Insert[K, V] => insert(cmd.list, version)
+        case cmd: Insert[K, V] => insert(cmd.list, cmd.version.getOrElse(version))
         //case cmd: Remove[K, V] => remove(cmd.keys)
         //case cmd: Update[K, V] => update(cmd.list, version)
-      }).flatMap(prev => process(pos + 1, prev.error))
+      }).flatMap(prev => process(pos + 1, prev.error, prev.n))
     }
 
-    process(0, None)
+    process(0, None, 0)
   }
 
   def length: Future[Int] = {

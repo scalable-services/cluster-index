@@ -134,10 +134,16 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
     getRange(kctx.rangeId).flatMap(_.copy(sameId = true)).flatMap(r => r.isFull().map(_ -> r)).flatMap {
       case (false, range) =>
 
-        range.insert(data, insertVersion).map { r =>
+        /*range.insert(data, insertVersion).map { r =>
           ranges.update(range.ctx.indexId, range)
           r.n
-        }
+        }*/
+
+        range.execute(Seq(Commands.Insert(kctx.rangeId, data, Some(insertVersion))))
+          .map { r =>
+            ranges.update(range.ctx.indexId, range)
+            r.n
+          }
 
       case (true, range) => split(range)
     }

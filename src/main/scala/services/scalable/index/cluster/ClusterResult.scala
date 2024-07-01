@@ -15,6 +15,7 @@ object ClusterResult {
   case class UpdateResult(override val success: Boolean, n: Int, override val error: Option[Throwable] = None) extends ClusterResult
   case class RemovalResult(override val success: Boolean, n: Int, override val error: Option[Throwable] = None) extends ClusterResult
 
-  case class BatchResult(override val success: Boolean, error: Option[Throwable] = None) extends ClusterResult
+  case class BatchResult(override val success: Boolean, error: Option[Throwable] = None, n: Int = 0)
+    extends ClusterResult
 
 }

@@ -31,8 +31,8 @@ object Main {
 
     val indexId = UUID.randomUUID().toString
 
-    val session = TestHelper.createCassandraSession()
-    val storage = new CassandraStorage(session, true)//new MemoryStorage()
+//    val session = TestHelper.createCassandraSession()
+    val storage = /*new CassandraStorage(session, true)*/new MemoryStorage()
 
     var data = Seq.empty[(K, V, Option[String])]
 
