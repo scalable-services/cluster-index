@@ -17,6 +17,7 @@
     </appender>
 
     <logger name="org.apache.kafka" level="INFO"></logger>
+    <logger name="services.scalable.index" level="INFO"></logger>
     <logger name="com.datastax.oss.driver" level="INFO"></logger>
     <logger name="akka" level="INFO"></logger>
 

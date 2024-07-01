@@ -6,7 +6,7 @@ import services.scalable.index.impl.{GrpcByteSerializer, GrpcCommandSerializer}
 
 package object cluster {
 
-  object Serializers {
+  object ClusterSerializers {
 
     import services.scalable.index.DefaultSerializers._
 
