@@ -30,10 +30,13 @@ package object cluster {
     implicit val grpcStringKeyIndexContextCommandsSerializer = new GrpcCommandSerializer[String, KeyIndexContext]()
     //implicit val grpcRangeCommandSerializer = new GrpcRangeCommandSerializer[String, String]()
     //implicit val grpcMetaCommandSerializer = new GrpcMetaCommandSerializer[String]()
+
+    implicit val grpcIntBytesSerializer: GrpcByteSerializer[Int, Bytes] = new GrpcByteSerializer[Int, Bytes]()
   }
 
-  object Printers {
+  object ClusterPrinters {
     implicit def keyIndexContextToStringPrinter(k: KeyIndexContext): String = k.toString
+    implicit def intToStringPrinter(k: Int): String = k.toString
   }
 
 }

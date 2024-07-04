@@ -1,12 +1,13 @@
 package services.scalable.index.cluster
 
 import services.scalable.index.Commands.{Command, Insert, Remove, Update}
-import services.scalable.index.{Context, IndexBuilt, Leaf}
+import services.scalable.index.{Context, Errors, IndexBuilt, Leaf, ParentInfo}
 import services.scalable.index.grpc.{IndexContext, RootRef}
 import ClusterResult._
 
 import java.util.UUID
-import scala.concurrent.Future
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
 import scala.util.{Failure, Success}
 
 class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
@@ -24,11 +25,13 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
   protected def getLeaf(): Future[Option[Leaf[K, V]]] = {
     ctx.getRoot().map {
       case None => None
-      case Some(block) => Some(block.asInstanceOf[Leaf[K, V]])
+      case Some(block) =>
+        ctx.parents.put(block.unique_id, ParentInfo())
+        Some(block.asInstanceOf[Leaf[K, V]])
     }
   }
 
-  protected def insertEmpty(leaf: Leaf[K, V], data: Seq[(K, V, Boolean)],
+  protected def insert(leaf: Leaf[K, V], data: Seq[(K, V, Boolean)],
                             insertVersion: String): Future[InsertionResult] = {
     leaf.insert(data, insertVersion) match {
       case Success(n) =>
@@ -67,14 +70,32 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
     }
   }
 
-  def insert(data: Seq[Tuple3[K, V, Boolean]], insertVersion: String): Future[InsertionResult] = {
+  protected def insert(data: Seq[Tuple3[K, V, Boolean]], insertVersion: String): Future[InsertionResult] = {
     getLeaf().flatMap {
       case None =>
         val leaf = ctx.createLeaf()
-        insertEmpty(leaf, data, insertVersion)
+        insert(leaf, data, insertVersion)
 
       case Some(leaf) =>
-        insertEmpty(leaf, data, insertVersion)
+        insert(leaf, data, insertVersion)
+    }
+  }
+
+  protected def remove(keys: Seq[Tuple2[K, Option[String]]], removalVersion: String): Future[RemovalResult] = {
+    getLeaf().flatMap {
+      case None => Future.failed(new RuntimeException("no range!"))
+      case Some(leaf) =>
+
+        val result = leaf.remove(keys)
+
+        if(result.isSuccess){
+          ctx.root = Some(leaf.unique_id)
+          ctx.num_elements -= result.get
+          ctx.levels = 1
+        }
+
+        Future.successful(RemovalResult(result.isSuccess, if(result.isSuccess) result.get else 0,
+          if(result.isSuccess) None else Some(result.failed.get)))
     }
   }
 
@@ -93,7 +114,7 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
 
       (cmd match {
         case cmd: Insert[K, V] => insert(cmd.list, cmd.version.getOrElse(version))
-        //case cmd: Remove[K, V] => remove(cmd.keys)
+        case cmd: Remove[K, V] => remove(cmd.keys, cmd.version.getOrElse(version))
         //case cmd: Update[K, V] => update(cmd.list, version)
       }).flatMap(prev => process(pos + 1, prev.error, prev.n))
     }
@@ -143,6 +164,10 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
     }
   }
 
+  def inOrderSync(): Seq[Tuple3[K, V, String]] = {
+    Await.result(inOrder(), Duration.Inf)
+  }
+
   def max(): Future[Option[Tuple3[K, V, String]]] = {
     getLeaf().map {
       case None => None
@@ -173,6 +198,64 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
         range.ctx.newBlocksReferences.put(copy.unique_id, copy)
 
         range
+    }
+  }
+
+  def merge(right: Range[K, V], version: String): Future[Range[K, V]] = {
+    for {
+      leftLeaf <- getLeaf().map(_.get)
+      rightLeaf <- right.getLeaf().map(_.get)
+    } yield {
+      val merged = leftLeaf.merge(rightLeaf, version)
+
+      ctx.num_elements = merged.asInstanceOf[Leaf[K, V]].length
+      ctx.lastChangeVersion = UUID.randomUUID().toString
+      ctx.levels = 1
+      ctx.root = Some(merged.unique_id)
+      ctx.parents.put(merged.unique_id, ParentInfo())
+
+      this
+    }
+  }
+
+  def borrow(target: Range[K, V], version: String): Future[Range[K, V]] = {
+    for {
+      leftLeaf <- getLeaf().map(_.get)
+      targetLeaf <- target.getLeaf().map(_.get)
+    } yield {
+
+      if(builder.ord.gt(leftLeaf.min().get._1, targetLeaf.max().get._1)){
+        leftLeaf.borrowRightTo(targetLeaf)
+      } else {
+        leftLeaf.borrowLeftTo(targetLeaf)
+      }
+
+      val lv = UUID.randomUUID().toString
+
+      ctx.num_elements = leftLeaf.length
+      ctx.lastChangeVersion = lv
+      ctx.levels = 1
+      ctx.root = Some(leftLeaf.unique_id)
+      ctx.parents.put(leftLeaf.unique_id, ParentInfo())
+
+      target.ctx.num_elements = targetLeaf.length
+      target.ctx.lastChangeVersion = lv
+      target.ctx.levels = 1
+      target.ctx.root = Some(targetLeaf.unique_id)
+      target.ctx.parents.put(targetLeaf.unique_id, ParentInfo())
+
+      this
+    }
+  }
+
+  def missingToMin(): Int = {
+    (builder.MAX_N_ITEMS/2 - ctx.num_elements).toInt
+  }
+
+  def canBorrow(n: Int): Future[Boolean] = {
+    getLeaf().map {
+      case None => false
+      case Some(leaf) => leaf.length - n >= leaf.MIN
     }
   }
 
