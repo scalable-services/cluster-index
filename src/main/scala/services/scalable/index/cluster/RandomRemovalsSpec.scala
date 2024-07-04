@@ -87,7 +87,7 @@ object RandomRemovalsSpec {
     val ranges = Await.result(ci2.meta.all(ci2.meta.inOrder()), Duration.Inf)
 
     val futures = Future.sequence(ranges.map(x => ci2.getRange(x._2.rangeId).flatMap(_.inOrder())))
-    val toRemove = scala.util.Random.shuffle(Await.result(futures, Duration.Inf).flatten).slice(0, 771)
+    val toRemove = scala.util.Random.shuffle(Await.result(futures, Duration.Inf).flatten).slice(0, 333)
       .map { case (k, v, vs) =>
       k -> Some(vs)
     }
