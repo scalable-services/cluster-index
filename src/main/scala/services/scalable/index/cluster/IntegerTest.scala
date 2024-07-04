@@ -4,15 +4,15 @@ import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
-import services.scalable.index.{Bytes, DefaultComparators, DefaultPrinters, DefaultSerializers, IndexBuilder}
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, MemoryStorage}
+import services.scalable.index.{Bytes, DefaultComparators, DefaultPrinters, DefaultSerializers, IndexBuilder}
 
 import java.util.UUID
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
-object Main {
+object IntegerTest {
 
   def main(args: Array[String]): Unit = {
 
@@ -21,7 +21,7 @@ object Main {
     val rand = ThreadLocalRandom.current()
     import scala.concurrent.ExecutionContext.Implicits.global
 
-    type K = Bytes
+    type K = Int
     type V = Bytes
 
     import services.scalable.index.DefaultComparators._
@@ -31,8 +31,8 @@ object Main {
 
     val indexId = UUID.randomUUID().toString
 
-//    val session = TestHelper.createCassandraSession()
-    val storage = /*new CassandraStorage(session, true)*/new MemoryStorage()
+    val session = TestHelper.createCassandraSession()
+    val storage = new CassandraStorage(session, true)/*new MemoryStorage()*/
 
     var data = Seq.empty[(K, V, Option[String])]
 
@@ -47,12 +47,12 @@ object Main {
       .withNumMetaItems(MAX_ITEMS)
       .withLastChangeVersion(UUID.randomUUID().toString)
 
-    val rangeBuilder = IndexBuilder.create[K, V](global, DefaultComparators.bytesOrd,
+    val rangeBuilder = IndexBuilder.create[K, V](global, DefaultComparators.ordInt,
         indexContext.numLeafItems, indexContext.numMetaItems, indexContext.maxNItems,
-        DefaultSerializers.bytesSerializer, DefaultSerializers.bytesSerializer)
+        DefaultSerializers.intSerializer, DefaultSerializers.bytesSerializer)
       .storage(storage)
-      .serializer(DefaultSerializers.grpcBytesBytesSerializer)
-      .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
+      .serializer(ClusterSerializers.grpcIntBytesSerializer)
+      .keyToStringConverter(ClusterPrinters.intToStringPrinter)
       .build()
 
     val clusterIndexDescriptor = Await.result(
@@ -71,11 +71,11 @@ object Main {
 
     val version = "v1"
 
-    for(i<-0 until 5000){
-      val k = RandomStringUtils.randomAlphabetic(10).getBytes(Charsets.UTF_8)
+    for(i<-1 to 5000){
+      val k: K = i//RandomStringUtils.randomAlphabetic(10).getBytes(Charsets.UTF_8)
 
       if(!data.exists{case (k1, _, _) => rangeBuilder.ord.equiv(k, k1)}){
-        data = data :+ (k, k, Some(version))
+        data = data :+ (k, k.toString.getBytes(Charsets.UTF_8), Some(version))
       }
     }
 
@@ -85,14 +85,28 @@ object Main {
 
     val ci2 = new ClusterIndex[K, V](ctx)(rangeBuilder)
 
-    val dordered = data.sortBy(_._1).map(x => new String(x._1))
-    val ordered = ci2.inOrder().map(x => new String(x._1))
+    val toRemove = Await.result(ci2.meta.all(ci2.meta.inOrder()).flatMap { ranges =>
+      val rctx = ranges(ranges.length - 2)._2
+      ci2.getRange(rctx.rangeId).flatMap(_.inOrder())
+    }, Duration.Inf).slice(0, 100).map { case (k, v, vs) =>
+      k -> Some(vs)
+    }
+
+    val r3 = Await.result(ci2.remove(toRemove, version), Duration.Inf)
+    data = data.filterNot{case (k1, _, _) => toRemove.exists{case (k, _) => rangeBuilder.ord.equiv(k, k1)}}
+
+    val ctx3 = Await.result(ci2.save(), Duration.Inf)
+    val ci3 = new ClusterIndex[K, V](ctx3)(rangeBuilder)
+
+    val dordered = data.sortBy(_._1).map(x => rangeBuilder.ks(x._1))
+    val ordered = ci3.inOrder().map(x => rangeBuilder.ks(x._1))
 
     assert(dordered == ordered)
 
     println("finished")
 
-    Await.result(storage.close(), Duration.Inf)
+    //Await.result(storage.close(), Duration.Inf)
+    session.close()
 
   }
 
