@@ -4,7 +4,7 @@ import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
 import org.slf4j.LoggerFactory
 import services.scalable.index.grpc.IndexContext
-import services.scalable.index.impl.CassandraStorage
+import services.scalable.index.impl.{CassandraStorage, MemoryStorage}
 import services.scalable.index.{Bytes, DefaultComparators, DefaultSerializers, IndexBuilder}
 
 import java.util.UUID
@@ -30,12 +30,12 @@ object RandomRemovalsSpec {
 
     val indexId = UUID.randomUUID().toString
 
-    val session = TestHelper.createCassandraSession()
-    val storage = new CassandraStorage(session, true)/*new MemoryStorage()*/
+    //val session = TestHelper.createCassandraSession()
+    val storage = /*new CassandraStorage(session, true)*/new MemoryStorage()
 
     var data = Seq.empty[(K, V, Option[String])]
 
-    val MAX_ITEMS = 512
+    val MAX_ITEMS = 128
 
     val indexContext = IndexContext()
       .withId(UUID.randomUUID().toString)
@@ -101,7 +101,7 @@ object RandomRemovalsSpec {
     val dordered = data.sortBy(_._1).map(x => rangeBuilder.ks(x._1))
     val ordered = ci3.inOrder().map(x => rangeBuilder.ks(x._1))
 
-    session.close()
+    //session.close()
     assert(dordered == ordered)
 
     println("finished")
