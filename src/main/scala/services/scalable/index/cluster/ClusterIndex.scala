@@ -5,6 +5,7 @@ import services.scalable.index.grpc.{IndexContext, RootRef}
 import services.scalable.index.{Commands, Errors, IndexBuilder, IndexBuilt, QueryableIndex, Tuple}
 import ClusterResult._
 import com.google.protobuf.ByteString
+import services.scalable.index.Commands.Command
 import services.scalable.index.Errors.IndexError
 import services.scalable.index.impl.MemoryStorage
 
@@ -14,8 +15,7 @@ import scala.concurrent.duration.{DAYS, Duration}
 import scala.concurrent.{Await, Future}
 
 final class ClusterIndex[K, V](val descriptor: IndexContext)
-                              (implicit val rangeBuilder: IndexBuilt[K, V],
-                               testData: Seq[K]) {
+                              (implicit val rangeBuilder: IndexBuilt[K, V]) {
 
   implicit val clusterBuilder = IndexBuilder
     .create[K, KeyIndexContext](rangeBuilder.ec, rangeBuilder.ord,
@@ -27,27 +27,6 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
 
   import clusterBuilder._
   //import rangeBuilder._
-
-  var testData1 = testData
-
-  def checkPartialData(from: String): Boolean = {
-    val ordered = inOrder().map(_._1)
-    val testData2 = testData1.sorted
-
-    println("index: ", ordered.map(x => rangeBuilder.ks.apply(x)))
-    println("data: ", testData2.map(x => rangeBuilder.ks.apply(x)))
-
-    val ok = ordered.length == testData2.length &&
-      ordered.zipWithIndex.forall{case (x, i) => rangeBuilder.ord.equiv(x, testData2(i))}
-
-    if(!ok){
-      println()
-    }
-
-    println(s"${Console.GREEN_B}ok from ${from}...${Console.RESET}")
-
-    ok
-  }
 
   val meta = new QueryableIndex[K, KeyIndexContext](descriptor)(clusterBuilder)
   val ranges = TrieMap.empty[String, Range[K, V]]
@@ -295,15 +274,6 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
         ranges.remove(right.ctx.indexId)
         ranges.put(merged.ctx.indexId, merged)
 
-        if(!checkPartialData("merge")){
-
-          val yy = testData1
-          val xx = inOrder()
-
-          println()
-          assert(false)
-        }
-
         0
       }
     }
@@ -344,11 +314,6 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
 
             ranges.put(range.ctx.indexId, range)
             ranges.put(borrower.ctx.indexId, borrower)
-
-            if(!checkPartialData("borrowing")) {
-              println()
-              assert(false)
-            }
 
             0
           }
@@ -425,23 +390,11 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
         ), Some(version))
       )).map { _ =>
         ranges.remove(range.ctx.indexId)
-
-        if(!checkPartialData("single empty")){
-          println()
-          assert(false)
-        }
-
         0
       }
 
       case false =>
         ranges.update(range.ctx.indexId, range)
-
-        if(!checkPartialData("single")){
-          println()
-          assert(false)
-        }
-
         Future.successful(0)
     }
   }
@@ -493,10 +446,6 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
 
   protected def removeFromLeaf(lastKey: K, kctx: KeyIndexContext, lastVersion: String, keys: Seq[(K, Option[String])],
                                removalVersion: String): Future[Int] = {
-
-    //checkPartialData()
-    testData1 = testData1.filterNot{x => keys.exists{x2 => rangeBuilder.ord.equiv(x, x2._1)}}
-
     getRange(kctx.rangeId).flatMap { l =>
       l.copy(sameId = true)
     }.flatMap { range =>
@@ -505,12 +454,6 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
            case true =>
 
              ranges.update(range.ctx.indexId, range)
-
-             if(!checkPartialData("simple removal")) {
-               println(this.inOrder().length)
-               assert(false)
-             }
-             
              Future.successful(r.n)
 
            case false => tryToBorrow(range, kctx, lastKey, lastVersion, removalVersion, keys.map(_._1)).map(_ => keys.length)
@@ -554,6 +497,10 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       case t: Throwable => throw t
     }
   }
+
+  /*def execute(cmds: Seq[Command[K, V]], version: String): Future[BatchResult] = {
+
+  }*/
 
   def inOrder(): Seq[Tuple[K, V]] = {
       Await.result(meta.all(

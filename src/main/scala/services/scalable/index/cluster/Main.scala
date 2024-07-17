@@ -67,7 +67,7 @@ object Main {
       Duration.Inf
     )
 
-    val clusterIndex = new ClusterIndex[K, V](clusterIndexDescriptor)(rangeBuilder, null)
+    val clusterIndex = new ClusterIndex[K, V](clusterIndexDescriptor)(rangeBuilder)
 
     val version = "v1"
 
@@ -83,7 +83,7 @@ object Main {
 
     val ctx = Await.result(clusterIndex.save(), Duration.Inf)
 
-    val ci2 = new ClusterIndex[K, V](ctx)(rangeBuilder, null)
+    val ci2 = new ClusterIndex[K, V](ctx)(rangeBuilder)
 
     val dordered = data.sortBy(_._1).map(x => new String(x._1))
     val ordered = ci2.inOrder().map(x => new String(x._1))

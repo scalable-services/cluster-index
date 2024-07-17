@@ -67,7 +67,7 @@ object RandomOperationsSpec {
       Duration.Inf
     )
 
-    val clusterIndex = new ClusterIndex[K, V](clusterIndexDescriptor)(rangeBuilder, data.map(_._1))
+    val clusterIndex = new ClusterIndex[K, V](clusterIndexDescriptor)(rangeBuilder)
 
     val version = "v1"
 
@@ -83,7 +83,7 @@ object RandomOperationsSpec {
 
     val ctx = Await.result(clusterIndex.save(), Duration.Inf)
 
-    val ci2 = new ClusterIndex[K, V](ctx)(rangeBuilder, data.map(_._1))
+    val ci2 = new ClusterIndex[K, V](ctx)(rangeBuilder)
 
     val ranges = Await.result(ci2.meta.all(ci2.meta.inOrder()), Duration.Inf)
 
@@ -97,7 +97,7 @@ object RandomOperationsSpec {
     data = data.filterNot{case (k1, _, _) => toRemove.exists{case (k, _) => rangeBuilder.ord.equiv(k, k1)}}
 
     val ctx3 = Await.result(ci2.save(), Duration.Inf)
-    val ci3 = new ClusterIndex[K, V](ctx3)(rangeBuilder, data.map(_._1))
+    val ci3 = new ClusterIndex[K, V](ctx3)(rangeBuilder)
 
     val dordered = data.sortBy(_._1).map(x => rangeBuilder.ks(x._1))
     val ordered = ci3.inOrder().map(x => rangeBuilder.ks(x._1))

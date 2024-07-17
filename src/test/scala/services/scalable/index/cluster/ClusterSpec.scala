@@ -72,7 +72,7 @@ class ClusterSpec extends AnyFlatSpec with Repeatable {
       }
     }
 
-    val clusterIndex = new ClusterIndex[K, V](clusterIndexDescriptor)(rangeBuilder, data.map(_._1))
+    val clusterIndex = new ClusterIndex[K, V](clusterIndexDescriptor)(rangeBuilder)
 
     val result = Await.result(clusterIndex.insert(data.map(x => (x._1, x._2, true)), version), Duration.Inf)
 
@@ -87,7 +87,7 @@ class ClusterSpec extends AnyFlatSpec with Repeatable {
 
     val ctx2 = Await.result(clusterIndex.save(), Duration.Inf)
 
-    val c2 = new ClusterIndex[K, V](ctx2)(rangeBuilder, data.map(_._1))
+    val c2 = new ClusterIndex[K, V](ctx2)(rangeBuilder)
 
     val result1 = Await.result(c2.remove(toRemove, version), Duration.Inf)
 
