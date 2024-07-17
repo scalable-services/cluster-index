@@ -2,16 +2,17 @@ package services.scalable.index.cluster
 
 import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
+import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
 import services.scalable.index.grpc.IndexContext
-import services.scalable.index.impl.CassandraStorage
-import services.scalable.index.{Bytes, DefaultComparators, DefaultSerializers, IndexBuilder}
+import services.scalable.index.impl.{CassandraStorage, MemoryStorage}
+import services.scalable.index.{Bytes, DefaultComparators, DefaultPrinters, DefaultSerializers, IndexBuilder}
 
 import java.util.UUID
-import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
 
-object RandomRemovalsSpec {
+object RandomOperationsSpec {
 
   def main(args: Array[String]): Unit = {
 
@@ -20,22 +21,22 @@ object RandomRemovalsSpec {
     val rand = ThreadLocalRandom.current()
     import scala.concurrent.ExecutionContext.Implicits.global
 
-    type K = Int
+    type K = Bytes
     type V = Bytes
 
     import services.scalable.index.DefaultComparators._
 
-    val NUM_LEAF_ENTRIES = 16//rand.nextInt(4, 64)
-    val NUM_META_ENTRIES = 16//rand.nextInt(4, 64)
+    val NUM_LEAF_ENTRIES = 8//rand.nextInt(4, 64)
+    val NUM_META_ENTRIES = 8//rand.nextInt(4, 64)
 
     val indexId = UUID.randomUUID().toString
 
-    val session = TestHelper.createCassandraSession()
-    val storage = new CassandraStorage(session, true)/*new MemoryStorage()*/
+    //val session = TestHelper.createCassandraSession()
+    val storage = /*new CassandraStorage(session, true)*/new MemoryStorage()
 
     var data = Seq.empty[(K, V, Option[String])]
 
-    val MAX_ITEMS = 512
+    val MAX_ITEMS = 128
 
     val indexContext = IndexContext()
       .withId(UUID.randomUUID().toString)
@@ -46,12 +47,12 @@ object RandomRemovalsSpec {
       .withNumMetaItems(MAX_ITEMS)
       .withLastChangeVersion(UUID.randomUUID().toString)
 
-    val rangeBuilder = IndexBuilder.create[K, V](global, DefaultComparators.ordInt,
+    val rangeBuilder = IndexBuilder.create[K, V](global, DefaultComparators.bytesOrd,
         indexContext.numLeafItems, indexContext.numMetaItems, indexContext.maxNItems,
-        DefaultSerializers.intSerializer, DefaultSerializers.bytesSerializer)
+        DefaultSerializers.bytesSerializer, DefaultSerializers.bytesSerializer)
       .storage(storage)
-      .serializer(ClusterSerializers.grpcIntBytesSerializer)
-      .keyToStringConverter(ClusterPrinters.intToStringPrinter)
+      .serializer(DefaultSerializers.grpcBytesBytesSerializer)
+      .keyToStringConverter(DefaultPrinters.byteArrayToStringPrinter)
       .build()
 
     val clusterIndexDescriptor = Await.result(
@@ -70,8 +71,8 @@ object RandomRemovalsSpec {
 
     val version = "v1"
 
-    for(i<-1 to 5000){
-      val k: K = i//RandomStringUtils.randomAlphabetic(10).getBytes(Charsets.UTF_8)
+    for(i<-1 to 2000){
+      val k: K = RandomStringUtils.randomAlphabetic(10).toLowerCase().getBytes(Charsets.UTF_8)
 
       if(!data.exists{case (k1, _, _) => rangeBuilder.ord.equiv(k, k1)}){
         data = data :+ (k, k.toString.getBytes(Charsets.UTF_8), Some(version))
@@ -87,7 +88,7 @@ object RandomRemovalsSpec {
     val ranges = Await.result(ci2.meta.all(ci2.meta.inOrder()), Duration.Inf)
 
     val futures = Future.sequence(ranges.map(x => ci2.getRange(x._2.rangeId).flatMap(_.inOrder())))
-    val toRemove = scala.util.Random.shuffle(Await.result(futures, Duration.Inf).flatten).slice(0, 1234)
+    val toRemove = scala.util.Random.shuffle(Await.result(futures, Duration.Inf).flatten).slice(0, 1431)
       .map { case (k, v, vs) =>
       k -> Some(vs)
     }
@@ -101,7 +102,7 @@ object RandomRemovalsSpec {
     val dordered = data.sortBy(_._1).map(x => rangeBuilder.ks(x._1))
     val ordered = ci3.inOrder().map(x => rangeBuilder.ks(x._1))
 
-    session.close()
+    //session.close()
     assert(dordered == ordered)
 
     println("finished")

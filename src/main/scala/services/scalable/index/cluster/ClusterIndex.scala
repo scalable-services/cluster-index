@@ -5,12 +5,13 @@ import services.scalable.index.grpc.{IndexContext, RootRef}
 import services.scalable.index.{Commands, Errors, IndexBuilder, IndexBuilt, QueryableIndex, Tuple}
 import ClusterResult._
 import com.google.protobuf.ByteString
+import services.scalable.index.Commands.Command
 import services.scalable.index.Errors.IndexError
 import services.scalable.index.impl.MemoryStorage
 
 import java.util.UUID
 import scala.collection.concurrent.TrieMap
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{DAYS, Duration}
 import scala.concurrent.{Await, Future}
 
 final class ClusterIndex[K, V](val descriptor: IndexContext)
@@ -21,10 +22,11 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       descriptor.numLeafItems, descriptor.numMetaItems, descriptor.maxNItems,
       rangeBuilder.keySerializer, ClusterSerializers.keyIndexSerializer)
     .storage(rangeBuilder.storage)
-   // .cache(rangeBuilder.cache)
+    // .cache(rangeBuilder.cache)
     .build()
 
   import clusterBuilder._
+  //import rangeBuilder._
 
   val meta = new QueryableIndex[K, KeyIndexContext](descriptor)(clusterBuilder)
   val ranges = TrieMap.empty[String, Range[K, V]]
@@ -185,31 +187,73 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
   }
 
   protected def getRightRange(k: K): Future[Option[(Range[K, V], K, KeyIndexContext, String)]] = {
+
+    val metaKeys = Await.result(meta.all(meta.inOrder()), Duration.Inf)
+    val nkpos = metaKeys.indexWhere(x => rangeBuilder.ord.equiv(x._1, k))
+    val nk = if(nkpos == metaKeys.length - 1) None else Some(metaKeys(nkpos + 1))
+
     meta.nextKey(k)(rangeBuilder.ord).flatMap {
-      case None => Future.successful(None)
-      case Some((knext, kctx, lastK)) => storage.loadIndex(kctx.rangeId)
-        .map(_.get).map { c =>
-        Some((new Range[K, V](c)(rangeBuilder), knext, kctx, lastK))
-      }
+      case None =>
+        assert(nk.isEmpty)
+
+        Future.successful(None)
+      case Some((knext, kctx, lastK)) =>
+
+        assert(nk.isDefined && rangeBuilder.ord.equiv(knext, nk.get._1))
+
+       /* if(!ranges.isDefinedAt(kctx.rangeId)){
+          assert(false)
+        }*/
+
+        /*storage.loadIndex(kctx.rangeId)*/
+        getRange(kctx.rangeId).map{r =>
+
+            Some((r, knext, kctx, lastK))
+        }
+        /*.map(_.get)
+        .map { c =>
+        Some((new Range[K, V](c)(rangeBuilder), knext, kctx, lastK))*/
+
     }
   }
 
   protected def getLeftRange(k: K): Future[Option[(Range[K, V], K, KeyIndexContext, String)]] = {
+
+    val metaKeys = Await.result(meta.all(meta.inOrder()), Duration.Inf)
+    val nkpos = metaKeys.indexWhere(x => rangeBuilder.ord.equiv(x._1, k))
+    val kp = if(nkpos == 0) None else Some(metaKeys(nkpos - 1))
+
     meta.previousKey(k)(rangeBuilder.ord).flatMap {
       case None => Future.successful(None)
-      case Some((kprev, kctx, lastK)) => storage.loadIndex(kctx.rangeId)
+      case Some((kprev, kctx, lastK)) =>
+
+        assert(kp.isDefined && rangeBuilder.ord.equiv(kprev, kp.get._1))
+
+        /*if(!ranges.isDefinedAt(kctx.rangeId)){
+          assert(false)
+        }*/
+
+        /*storage.loadIndex(kctx.rangeId)*/
+        getRange(kctx.rangeId).map{r =>
+
+          Some((r, kprev, kctx, lastK))
+        }
+
+      /*storage.loadIndex(kctx.rangeId)
         .map(_.get).map { c =>
           Some((new Range[K, V](c)(rangeBuilder), kprev, kctx, lastK))
-        }
+        }*/
     }
   }
 
   protected def merge(leftInfo: (Range[K, V], K, KeyIndexContext, String),
-                      rightInfo: (Range[K, V], K, KeyIndexContext, String), version: String): Future[Int] = {
+                      rightInfo: (Range[K, V], K, KeyIndexContext, String), version: String, keys: Seq[K]): Future[Int] = {
     val (left, leftLastKey, leftCtx, leftLastVersion) = leftInfo
     val (right, rightLastKey, rightCtx, rightLastVersion) = rightInfo
 
-    left.merge(right, version).flatMap{ merged => merged.max().map(_.get).map(merged -> _)}.flatMap { case (merged, (mergedLastKey, _, _)) =>
+    left.merge(right, version).flatMap{ merged => merged.max().map(_.get).map(merged -> _)}
+      .flatMap { case (merged, (mergedLastKey, _, _)) =>
+
       val mergedCtx = KeyIndexContext()
         .withRangeId(merged.ctx.indexId)
         .withLastChangeVersion(merged.ctx.lastChangeVersion)
@@ -234,21 +278,7 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       }
     }
   }
-
-  /*protected def borrow(range: Range[K, V], rangeCtx: KeyIndexContext, lastKey: K, lastVersion: String,
-                       version: String): Future[Int] = {
-    getRightRange(lastKey).map(_.get).flatMap { case (aux, auxLastKey, auxCtx, auxLastVersion) =>
-      merge((range, lastKey, rangeCtx, lastVersion), (aux, auxLastKey, auxCtx, auxLastVersion), version)
-    }
-  }*/
-
-  /*protected def borrow(range: Range[K, V], rangeCtx: KeyIndexContext, lastKey: K, lastVersion: String,
-                       version: String): Future[Int] = {
-    getLeftRange(lastKey).map(_.get).flatMap { case (aux, auxLastKey, auxCtx, auxLastVersion) =>
-      merge((aux, auxLastKey, auxCtx, auxLastVersion), (range, lastKey, rangeCtx, lastVersion), version)
-    }
-  }*/
-
+  
   protected def borrow(rangeInfo: (Range[K, V], K, KeyIndexContext, String),
                        auxInfo: (Range[K, V], K, KeyIndexContext, String), version: String): Future[Int] = {
 
@@ -319,13 +349,33 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
     }
   }
 
-  protected def whoCanMerge(target: Range[K, V],
-                             leftInfo: Option[(Range[K, V], K, KeyIndexContext, String)],
+  protected def whoCanMerge(leftInfo: Option[(Range[K, V], K, KeyIndexContext, String)],
                              rightInfo: Option[(Range[K, V], K, KeyIndexContext, String)]): Future[Option[(Range[K, V], K, KeyIndexContext, String)]] = {
     (leftInfo, rightInfo) match {
       case (Some(left), None) => Future.successful(leftInfo)
       case (None, Some(right)) => Future.successful(rightInfo)
-      case (Some(left), Some(right)) => Future.successful(leftInfo)
+      case (Some(left), Some(right)) =>
+        Future.successful(if(left._1.ctx.num_elements < right._1.ctx.num_elements) leftInfo else rightInfo)
+      case (None, None) => Future.successful(None)
+    }
+  }
+
+  protected def whoCanMerge2(leftInfo: Option[(Range[K, V], K, KeyIndexContext, String)],
+                            rightInfo: Option[(Range[K, V], K, KeyIndexContext, String)]): Future[Option[(Range[K, V], K, KeyIndexContext, String)]] = {
+    (leftInfo, rightInfo) match {
+      case (Some(left), None) => Future.successful(if(left._1.ctx.num_elements < rangeBuilder.MAX_N_ITEMS/2) leftInfo else None)
+      case (None, Some(right)) => Future.successful(if(right._1.ctx.num_elements < rangeBuilder.MAX_N_ITEMS/2) rightInfo else None)
+      case (Some(left), Some(right)) =>
+
+        if(left._1.ctx.num_elements < rangeBuilder.MAX_N_ITEMS/2){
+          Future.successful(leftInfo)
+        } else if(right._1.ctx.num_elements < rangeBuilder.MAX_N_ITEMS/2){
+          Future.successful(rightInfo)
+        } else {
+          Future.successful(None)
+        }
+
+        //Future.successful(if(left._1.ctx.num_elements < right._1.ctx.num_elements) leftInfo else rightInfo)
       case (None, None) => Future.successful(None)
     }
   }
@@ -350,7 +400,7 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
   }
 
   protected def tryToBorrow(range: Range[K, V], rangeCtx: KeyIndexContext, lastKey: K, lastVersion: String,
-                       version: String): Future[Int] = {
+                       version: String, keys: Seq[K]): Future[Int] = {
     val rangeInfo = (range, lastKey, rangeCtx, lastVersion)
 
     (for {
@@ -362,31 +412,51 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       (borrowerInfo, (leftInfo, rightInfo))
     }).flatMap {
       case (Some(borrowerInfo), _) => borrow(rangeInfo, borrowerInfo, version)
-      case (None, (leftInfo, rightInfo)) => whoCanMerge(range, leftInfo, rightInfo).flatMap {
+      case (None, (leftInfo, rightInfo)) => whoCanMerge(leftInfo, rightInfo).flatMap {
         case Some(mergerInfo) => {
-          if(mergerInfo.equals(leftInfo)){
-            merge(leftInfo.get, rangeInfo, version)
+          if(leftInfo.isDefined && leftInfo.get._1.ctx.indexId == mergerInfo._1.ctx.indexId){
+            merge(leftInfo.get, rangeInfo, version, keys)
           } else {
-            merge(rangeInfo, rightInfo.get, version)
+            merge(rangeInfo, rightInfo.get, version, keys)
           }
         }
         case None => handleSingleRange(rangeInfo, version)
       }
     }
+
+    /*(for {
+      leftInfo <- getLeftRange(lastKey)
+      rightInfo <- getRightRange(lastKey)
+
+      mergerInfo <- whoCanMerge2(leftInfo, rightInfo)
+    } yield {
+      (mergerInfo, (leftInfo, rightInfo))
+    }).flatMap {
+      case (None, _) => handleSingleRange(rangeInfo, version)
+      case (Some(merger), (leftInfo, rightInfo)) =>
+
+        if(leftInfo.isDefined && leftInfo.get._1.ctx.indexId == merger._1.ctx.indexId){
+          merge(leftInfo.get, rangeInfo, version, keys)
+        } else {
+          merge(rangeInfo, rightInfo.get, version, keys)
+        }
+      }*/
+
   }
 
   protected def removeFromLeaf(lastKey: K, kctx: KeyIndexContext, lastVersion: String, keys: Seq[(K, Option[String])],
                                removalVersion: String): Future[Int] = {
-    getRange(kctx.rangeId).flatMap{ l =>
+    getRange(kctx.rangeId).flatMap { l =>
       l.copy(sameId = true)
     }.flatMap { range =>
       range.execute(Seq(Commands.Remove(kctx.rangeId, keys, Some(removalVersion)))).flatMap { r =>
          range.hasMinimum().flatMap {
            case true =>
-              ranges.update(range.ctx.indexId, range)
-              Future.successful(r.n)
 
-           case false => tryToBorrow(range, kctx, lastKey, lastVersion, removalVersion).map(_ => r.n)
+             ranges.update(range.ctx.indexId, range)
+             Future.successful(r.n)
+
+           case false => tryToBorrow(range, kctx, lastKey, lastVersion, removalVersion, keys.map(_._1)).map(_ => keys.length)
          }
       }
     }
@@ -414,6 +484,7 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
           removeFromLeaf(last, kctx, lastVersion, list, removalVersion)
       }.flatMap { n =>
         pos += n
+
         //ctx.num_elements += n
         remove()
       }
@@ -426,6 +497,10 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       case t: Throwable => throw t
     }
   }
+
+  /*def execute(cmds: Seq[Command[K, V]], version: String): Future[BatchResult] = {
+
+  }*/
 
   def inOrder(): Seq[Tuple[K, V]] = {
       Await.result(meta.all(
@@ -440,6 +515,22 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
 
           list
         }.flatten
+    }, Duration.Inf)
+  }
+
+  def inOrder2(filterNot: Seq[K]): Seq[Tuple[K, V]] = {
+    Await.result(meta.all(
+      meta.inOrder()
+    ).map { all =>
+
+      all.filterNot{x => filterNot.exists(y => ord.equiv(x._1, y))}.map { case (lastKey, kctx, lastVersion) =>
+        val range = Await.result(getRange(kctx.rangeId), Duration.Inf)
+        val list = Await.result(range.inOrder(), Duration.Inf)
+
+        println(s"range id: ${range.ctx.indexId} | maxKey: ${rangeBuilder.ks(lastKey)} | len: ${range.ctx.num_elements} list len: ${list.length}")
+
+        list
+      }.flatten
     }, Duration.Inf)
   }
 

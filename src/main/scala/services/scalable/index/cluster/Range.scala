@@ -88,11 +88,14 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
 
         val result = leaf.remove(keys)
 
-        if(result.isSuccess){
-          ctx.root = Some(leaf.unique_id)
-          ctx.num_elements -= result.get
-          ctx.levels = 1
+        if(!result.isSuccess){
+          assert(false)
         }
+
+        ctx.root = Some(leaf.unique_id)
+        ctx.num_elements -= keys.length
+        ctx.parents.put(leaf.unique_id, ParentInfo())
+        ctx.levels = 1
 
         Future.successful(RemovalResult(result.isSuccess, if(result.isSuccess) result.get else 0,
           if(result.isSuccess) None else Some(result.failed.get)))
@@ -206,28 +209,45 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
       leftLeaf <- getLeaf().map(_.get)
       rightLeaf <- right.getLeaf().map(_.get)
     } yield {
-      val merged = leftLeaf.merge(rightLeaf, version)
 
-      ctx.num_elements = merged.asInstanceOf[Leaf[K, V]].length
+      assert(leftLeaf.length + rightLeaf.length <= builder.MAX_N_ITEMS)
+
+      val before = (leftLeaf.inOrder() ++ rightLeaf.inOrder()).map(_._1).sorted.toList
+      val merged = leftLeaf.merge(rightLeaf, version).asInstanceOf[Leaf[K, V]]
+
+      ctx.num_elements = merged.length
       ctx.lastChangeVersion = UUID.randomUUID().toString
       ctx.levels = 1
       ctx.root = Some(merged.unique_id)
       ctx.parents.put(merged.unique_id, ParentInfo())
+
+      val after = merged.inOrder().map(_._1).toList
+
+      if(before != after){
+        assert(false)
+      }
 
       this
     }
   }
 
   def borrow(target: Range[K, V], version: String): Future[Range[K, V]] = {
+
+    assert(target.ctx.num_elements < builder.MAX_N_ITEMS/2)
+
     for {
       leftLeaf <- getLeaf().map(_.get)
       targetLeaf <- target.getLeaf().map(_.get)
     } yield {
 
-      if(builder.ord.gt(leftLeaf.min().get._1, targetLeaf.max().get._1)){
+      val before = (leftLeaf.inOrder() ++ targetLeaf.inOrder()).sortBy(_._1).map(_._1)
+
+      val after = if(builder.ord.gt(leftLeaf.min().get._1, targetLeaf.max().get._1)){
         leftLeaf.borrowRightTo(targetLeaf)
+        (targetLeaf.inOrder() ++ leftLeaf.inOrder()).map(_._1).toSeq
       } else {
         leftLeaf.borrowLeftTo(targetLeaf)
+        (leftLeaf.inOrder() ++ targetLeaf.inOrder()).map(_._1).toSeq
       }
 
       val lv = UUID.randomUUID().toString
@@ -243,6 +263,12 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
       target.ctx.levels = 1
       target.ctx.root = Some(targetLeaf.unique_id)
       target.ctx.parents.put(targetLeaf.unique_id, ParentInfo())
+
+      val fnoteq = before.zipWithIndex.filterNot {case (k, idx) => ord.equiv(k, after(idx))}
+
+      if(!(before.length == after.length && fnoteq.isEmpty)){
+        assert(false)
+      }
 
       this
     }

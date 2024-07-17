@@ -2,17 +2,16 @@
 
 import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
-import org.apache.commons.lang3.RandomStringUtils
 import org.slf4j.LoggerFactory
 import services.scalable.index.grpc.IndexContext
 import services.scalable.index.impl.{CassandraStorage, MemoryStorage}
-import services.scalable.index.{Bytes, DefaultComparators, DefaultPrinters, DefaultSerializers, IndexBuilder}
+import services.scalable.index.{Bytes, DefaultComparators, DefaultSerializers, IndexBuilder}
 
 import java.util.UUID
-import scala.concurrent.Await
+import scala.concurrent.{Await, Future}
 import scala.concurrent.duration.Duration
 
-object IntegerTest {
+object RandomRemovalsSpec {
 
   def main(args: Array[String]): Unit = {
 
@@ -31,12 +30,12 @@ object IntegerTest {
 
     val indexId = UUID.randomUUID().toString
 
-    val session = TestHelper.createCassandraSession()
-    val storage = new CassandraStorage(session, true)/*new MemoryStorage()*/
+    //val session = TestHelper.createCassandraSession()
+    val storage = /*new CassandraStorage(session, true)*/new MemoryStorage()
 
     var data = Seq.empty[(K, V, Option[String])]
 
-    val MAX_ITEMS = 512
+    val MAX_ITEMS = 128
 
     val indexContext = IndexContext()
       .withId(UUID.randomUUID().toString)
@@ -85,10 +84,11 @@ object IntegerTest {
 
     val ci2 = new ClusterIndex[K, V](ctx)(rangeBuilder)
 
-    val toRemove = Await.result(ci2.meta.all(ci2.meta.inOrder()).flatMap { ranges =>
-      val rctx = ranges(ranges.length - 2)._2
-      ci2.getRange(rctx.rangeId).flatMap(_.inOrder())
-    }, Duration.Inf).slice(0, 100).map { case (k, v, vs) =>
+    val ranges = Await.result(ci2.meta.all(ci2.meta.inOrder()), Duration.Inf)
+
+    val futures = Future.sequence(ranges.map(x => ci2.getRange(x._2.rangeId).flatMap(_.inOrder())))
+    val toRemove = scala.util.Random.shuffle(Await.result(futures, Duration.Inf).flatten).slice(0, 1234)
+      .map { case (k, v, vs) =>
       k -> Some(vs)
     }
 
@@ -101,12 +101,13 @@ object IntegerTest {
     val dordered = data.sortBy(_._1).map(x => rangeBuilder.ks(x._1))
     val ordered = ci3.inOrder().map(x => rangeBuilder.ks(x._1))
 
+    //session.close()
     assert(dordered == ordered)
 
     println("finished")
 
     //Await.result(storage.close(), Duration.Inf)
-    session.close()
+
 
   }
 
