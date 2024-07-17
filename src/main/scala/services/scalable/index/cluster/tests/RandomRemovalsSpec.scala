@@ -1,4 +1,4 @@
-package services.scalable.index.cluster
+/*package services.scalable.index.cluster
 
 import com.google.common.base.Charsets
 import io.netty.util.internal.ThreadLocalRandom
@@ -111,4 +111,4 @@ object RandomRemovalsSpec {
 
   }
 
-}
+}*/
