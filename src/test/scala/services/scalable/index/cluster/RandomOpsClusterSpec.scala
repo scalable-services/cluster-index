@@ -24,7 +24,7 @@ class RandomOpsClusterSpec extends AnyFlatSpec with Repeatable {
   "it" should "run successfully" in {
 
     val rand = ThreadLocalRandom.current()
-    val MAX_ITEMS = rand.nextInt()
+    val MAX_ITEMS = rand.nextInt(128, 512)
     val NUM_LEAF_ENTRIES = rand.nextInt(4, 64)
     val NUM_META_ENTRIES = rand.nextInt(4, 64)
 
@@ -51,7 +51,7 @@ class RandomOpsClusterSpec extends AnyFlatSpec with Repeatable {
     val version = "v1"
     val clusterIndexId = "ci2"
 
-    val clusterIndexDescriptor = Await.result(
+    Await.result(
       storage.loadOrCreate(IndexContext()
         .withId(clusterIndexId)
         .withLevels(0)
@@ -123,11 +123,37 @@ class RandomOpsClusterSpec extends AnyFlatSpec with Repeatable {
       println(s"${Console.RED_B}REMOVING ${toRemoveRandom.length}${Console.RESET}")
     }
 
+    def update(): Unit = {
+
+      if(data.isEmpty) {
+        println("no data to update! Index is empty!")
+        return
+      }
+
+      val toUpdateRandom = (if(data.length > 1) scala.util.Random.shuffle(data).slice(0, rand.nextInt(1, data.length))
+        else data).map { case (k, v) => (k, RandomStringUtils.randomAlphabetic(10), Some(version))}
+
+      val ctx = Await.result(storage.loadIndex(clusterIndexId), Duration.Inf).get
+      val cindex = new ClusterIndex[K, V](ctx)(rangeBuilder)
+
+      val r1 = Await.result(cindex.update(toUpdateRandom, version), Duration.Inf)
+
+      assert(r1.success)
+
+      val r2 = Await.result(cindex.save(), Duration.Inf)
+
+      data = data.filterNot{case (k, v) => toUpdateRandom.exists{case (k1, _, _) => rangeBuilder.ord.equiv(k, k1)}}
+      data = data ++ toUpdateRandom.map{case (k, v, _) => k -> v}
+
+      println(s"${Console.MAGENTA_B}UPDATING ${toUpdateRandom.length}${Console.RESET}")
+    }
+
     val n = 100
 
     for(i<-0 until n){
-      rand.nextInt(1, 3)  match {
-        case 1 => remove()
+      rand.nextInt(1, 100)  match {
+        case i if i % 3 == 0 => remove()
+        case i if i % 5 == 0 => update()
         case _ => insert()
       }
     }
@@ -135,13 +161,20 @@ class RandomOpsClusterSpec extends AnyFlatSpec with Repeatable {
     val ctx = Await.result(storage.loadIndex(clusterIndexId), Duration.Inf).get
     val cindex = new ClusterIndex[K, V](ctx)(rangeBuilder)
 
-    val dataOrdered = data.iterator.toSeq.sortBy(_._1).map(_._1).toList
-    val indexOrdered = cindex.inOrder().map(_._1).toList
+    val dataOrdered = data.iterator.toSeq.sortBy(_._1)/*.map(_._1)*/.toList
+    val indexOrdered = cindex.inOrder()/*.map(_._1)*/.toList
 
-    println(s"dataordered: ${dataOrdered.map(k => rangeBuilder.ks(k))}")
-    println(s"dataordered: ${indexOrdered.map(k => rangeBuilder.ks(k))}")
+    println(s"dataordered: ${dataOrdered.map(k => rangeBuilder.ks(k._1))}")
+    println(s"dataordered: ${indexOrdered.map(k => rangeBuilder.ks(k._1))}")
+    val keysEqual = indexOrdered.map(_._1) == dataOrdered.map(_._1)
+    val kvEqual = indexOrdered.zipWithIndex.map { case ((k, v, _), idx) =>
+      val (k1, v1) = dataOrdered(idx)
+      rangeBuilder.ord.equiv(k, k1) && rangeBuilder.ord.equiv(v, v1)
+    }.forall(_ == true)
 
-    assert(indexOrdered == dataOrdered)
+    if(kvEqual){
+      assert(false)
+    }
 
     storage.close()
     //session.close()

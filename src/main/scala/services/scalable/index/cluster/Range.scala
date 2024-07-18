@@ -102,6 +102,22 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
     }
   }
 
+  protected def update(data: Seq[Tuple3[K, V, Option[String]]], updateVersion: String): Future[UpdateResult] = {
+    getLeaf().flatMap {
+      case None => Future.failed(new RuntimeException("no range!"))
+      case Some(leaf) =>
+
+        val result = leaf.update(data, updateVersion)
+
+        if(!result.isSuccess){
+          assert(false)
+        }
+
+        Future.successful(UpdateResult(result.isSuccess, if(result.isSuccess) result.get else 0,
+          if(result.isSuccess) None else Some(result.failed.get)))
+    }
+  }
+
   def execute(cmds: Seq[Command[K, V]], version: String = ctx.id): Future[BatchResult] = {
 
     def process(pos: Int, error: Option[Throwable], n: Int): Future[BatchResult] = {
@@ -118,7 +134,7 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
       (cmd match {
         case cmd: Insert[K, V] => insert(cmd.list, cmd.version.getOrElse(version))
         case cmd: Remove[K, V] => remove(cmd.keys, cmd.version.getOrElse(version))
-        //case cmd: Update[K, V] => update(cmd.list, version)
+        case cmd: Update[K, V] => update(cmd.list, cmd.version.getOrElse(version))
       }).flatMap(prev => process(pos + 1, prev.error, prev.n))
     }
 
