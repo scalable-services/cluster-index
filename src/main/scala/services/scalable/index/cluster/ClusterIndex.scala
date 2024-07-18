@@ -17,6 +17,10 @@ import scala.concurrent.{Await, Future}
 final class ClusterIndex[K, V](val descriptor: IndexContext)
                               (implicit val rangeBuilder: IndexBuilt[K, V]) {
 
+  assert(rangeBuilder.MAX_N_ITEMS > 0)
+  assert(rangeBuilder.MAX_META_ITEMS > 0)
+  assert(rangeBuilder.MAX_LEAF_ITEMS > 0)
+
   implicit val clusterBuilder = IndexBuilder
     .create[K, KeyIndexContext](rangeBuilder.ec, rangeBuilder.ord,
       descriptor.numLeafItems, descriptor.numMetaItems, descriptor.maxNItems,
@@ -75,6 +79,12 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       assert(r.success)
 
       ranges.put(range.ctx.indexId, range)
+
+      if(Await.result(range.max().map(_.isEmpty), Duration.Inf)){
+        data
+        rangeBuilder
+        println()
+      }
 
       range.max().map(_.get).flatMap { case (lastKey, _, _) =>
         val kctx = KeyIndexContext()
@@ -494,6 +504,56 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       RemovalResult(true, n)
     }.recover {
       case t: IndexError => RemovalResult(false, 0, Some(t))
+      case t: Throwable => throw t
+    }
+  }
+
+  def updateRange(kctx: KeyIndexContext, data: Seq[(K, V, Option[String])], updateVersion: String): Future[ClusterResult.UpdateResult] = {
+    getRange(kctx.rangeId).flatMap { l =>
+      l.copy(sameId = true)
+    }.flatMap { range =>
+      range.execute(Seq(Commands.Update(kctx.rangeId, data, Some(updateVersion)))).map { r =>
+        ClusterResult.UpdateResult(r.success, r.n, r.error)
+      }
+    }
+  }
+
+  def update(data: Seq[Tuple3[K, V, Option[String]]], updateVersion: String): Future[UpdateResult] = {
+
+    val sorted = data.sortBy(_._1)
+
+    if(sorted.exists{case (k, _, _) => sorted.count{case (k1, _, _) => ord.equiv(k, k1)} > 1}){
+      return Future.successful(UpdateResult(false, 0, Some(Errors.DUPLICATED_KEYS(sorted.map(_._1),
+        rangeBuilder.ks))))
+    }
+
+    val len = sorted.length
+    var pos = 0
+
+    def update(): Future[Int] = {
+      if(len == pos) return Future.successful(sorted.length)
+
+      var list = sorted.slice(pos, len)
+      val (k, _, _) = list(0)
+
+      findPath(k).flatMap {
+        case None => Future.failed(Errors.KEY_NOT_FOUND(k, rangeBuilder.ks))
+        case Some((last, kctx, lastVersion)) =>
+
+          val idx = list.indexWhere{case (k, _, _) => ord.gt(k, last)}
+          if(idx > 0) list = list.slice(0, idx)
+
+          updateRange(kctx, list, updateVersion)
+      }.flatMap { r =>
+        pos += r.n
+        update()
+      }
+    }
+
+    update().map { n =>
+      UpdateResult(true, n)
+    }.recover {
+      case t: IndexError => UpdateResult(false, 0, Some(t))
       case t: Throwable => throw t
     }
   }
