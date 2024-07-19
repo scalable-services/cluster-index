@@ -107,7 +107,14 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
       case None => Future.failed(new RuntimeException("no range!"))
       case Some(leaf) =>
 
+        val beforeList = leaf.inOrder()
+
         val result = leaf.update(data, updateVersion)
+
+        val afterList = leaf.inOrder()
+
+        val map1 = beforeList.map(x => x._1 -> x._2).toMap
+        val map2 = afterList.map(x => x._1 -> x._2).toMap
 
         if(!result.isSuccess){
           assert(false)
