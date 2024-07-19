@@ -164,15 +164,27 @@ class RandomOpsClusterSpec extends AnyFlatSpec with Repeatable {
     val dataOrdered = data.iterator.toSeq.sortBy(_._1)/*.map(_._1)*/.toList
     val indexOrdered = cindex.inOrder()/*.map(_._1)*/.toList
 
+    val notSameData = dataOrdered.filterNot(x => rangeBuilder.ord.equiv(x._1, x._2))
+    val notSameIndex =  indexOrdered.filterNot(x => rangeBuilder.ord.equiv(x._1, x._2))
+
     println(s"dataordered: ${dataOrdered.map(k => rangeBuilder.ks(k._1))}")
     println(s"dataordered: ${indexOrdered.map(k => rangeBuilder.ks(k._1))}")
+
     val keysEqual = indexOrdered.map(_._1) == dataOrdered.map(_._1)
-    val kvEqual = indexOrdered.zipWithIndex.map { case ((k, v, _), idx) =>
+    val kvEqualComps = indexOrdered.zipWithIndex.map { case ((k, v, _), idx) =>
       val (k1, v1) = dataOrdered(idx)
       rangeBuilder.ord.equiv(k, k1) && rangeBuilder.ord.equiv(v, v1)
-    }.forall(_ == true)
+    }
 
-    if(kvEqual){
+    val kvEqual = kvEqualComps.forall(_ == true)
+    val falseOnes = kvEqualComps.filter(_ == false)
+
+    if(!keysEqual){
+      falseOnes
+      assert(false)
+    }
+
+    if(!kvEqual){
       assert(false)
     }
 

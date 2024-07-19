@@ -513,6 +513,10 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       l.copy(sameId = true)
     }.flatMap { range =>
       range.execute(Seq(Commands.Update(kctx.rangeId, data, Some(updateVersion)))).map { r =>
+        assert(r.success)
+
+        ranges.update(kctx.rangeId, range)
+
         ClusterResult.UpdateResult(r.success, r.n, r.error)
       }
     }
