@@ -13,6 +13,7 @@ import java.util.UUID
 import scala.collection.concurrent.TrieMap
 import scala.concurrent.duration.{DAYS, Duration}
 import scala.concurrent.{Await, Future}
+import scala.util.Try
 
 final class ClusterIndex[K, V](val descriptor: IndexContext)
                               (implicit val rangeBuilder: IndexBuilt[K, V]) {
@@ -37,23 +38,28 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
   val toRemove = TrieMap.empty[String, String]
 
   def save(): Future[IndexContext] = {
+
+    println(s"saving")
+
     Future.sequence(ranges.map(_._2.save())).flatMap { allOk =>
       meta.save()
     }
   }
 
   def getRange(id: String): Future[Range[K, V]] = {
-    ranges.get(id) match {
+    (ranges.get(id) match {
       case None => clusterBuilder.storage.loadIndex(id)
         .map{ctx => new Range[K, V](ctx.get)(rangeBuilder)}
       case Some(index) => Future.successful(index)
-    }
+    })
   }
 
   def findPath(k: K): Future[Option[Tuple[K, KeyIndexContext]]] = {
     meta.find(k).map {
-      case Some(leaf) => Some(leaf.findPath(k)._2)
-      case None => None
+      case Some(leaf) =>
+        Some(leaf.findPath(k)._2)
+      case None =>
+        None
     }
   }
 
@@ -216,7 +222,8 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
         }*/
 
         /*storage.loadIndex(kctx.rangeId)*/
-        getRange(kctx.rangeId).map{r =>
+
+        getRange(kctx.rangeId).flatMap(_.copy(true)).map{r =>
 
             Some((r, knext, kctx, lastK))
         }
@@ -244,7 +251,9 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
         }*/
 
         /*storage.loadIndex(kctx.rangeId)*/
-        getRange(kctx.rangeId).map{r =>
+
+        // Copying here is crucial to work correctly
+        getRange(kctx.rangeId).flatMap(_.copy(true)).map{ r =>
 
           Some((r, kprev, kctx, lastK))
         }
@@ -279,6 +288,8 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
           (mergedLastKey, mergedCtx, true)
         ), Some(version))
       )).map { _ =>
+
+        println("merging...")
 
         ranges.remove(left.ctx.indexId)
         ranges.remove(right.ctx.indexId)
@@ -321,6 +332,8 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
               (borrowerMax, borrowerCtx, true)
             ), Some(version))
           )).map { _ =>
+
+            println("borrowing...")
 
             ranges.put(range.ctx.indexId, range)
             ranges.put(borrower.ctx.indexId, borrower)
@@ -433,41 +446,28 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
         case None => handleSingleRange(rangeInfo, version)
       }
     }
-
-    /*(for {
-      leftInfo <- getLeftRange(lastKey)
-      rightInfo <- getRightRange(lastKey)
-
-      mergerInfo <- whoCanMerge2(leftInfo, rightInfo)
-    } yield {
-      (mergerInfo, (leftInfo, rightInfo))
-    }).flatMap {
-      case (None, _) => handleSingleRange(rangeInfo, version)
-      case (Some(merger), (leftInfo, rightInfo)) =>
-
-        if(leftInfo.isDefined && leftInfo.get._1.ctx.indexId == merger._1.ctx.indexId){
-          merge(leftInfo.get, rangeInfo, version, keys)
-        } else {
-          merge(rangeInfo, rightInfo.get, version, keys)
-        }
-      }*/
-
   }
 
   protected def removeFromLeaf(lastKey: K, kctx: KeyIndexContext, lastVersion: String, keys: Seq[(K, Option[String])],
-                               removalVersion: String): Future[Int] = {
-    getRange(kctx.rangeId).flatMap { l =>
-      l.copy(sameId = true)
-    }.flatMap { range =>
-      range.execute(Seq(Commands.Remove(kctx.rangeId, keys, Some(removalVersion)))).flatMap { r =>
-         range.hasMinimum().flatMap {
-           case true =>
+                               removalVersion: String): Future[RemovalResult] = {
+    // Remember to copy the range when altering it...
+    getRange(kctx.rangeId).flatMap(_.copy(true)).flatMap { range =>
+      range.execute(Seq(Commands.Remove(kctx.rangeId, keys, Some(removalVersion)))).flatMap {
+         case r if r.success =>
+           range.hasMinimum().flatMap {
+             case true =>
 
-             ranges.update(range.ctx.indexId, range)
-             Future.successful(r.n)
+               println("simple removal...")
 
-           case false => tryToBorrow(range, kctx, lastKey, lastVersion, removalVersion, keys.map(_._1)).map(_ => keys.length)
+               ranges.update(range.ctx.indexId, range)
+               Future.successful(RemovalResult(true, keys.length, None))
+
+             case false => tryToBorrow(range, kctx, lastKey, lastVersion, removalVersion, keys.map(_._1))
+               .map(_ => RemovalResult(true, keys.length, None))
          }
+
+         case r =>
+           Future.failed(r.error.get)
       }
     }
   }
@@ -485,15 +485,16 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
       val (k, _) = list(0)
 
       findPath(k).flatMap {
-        case None => Future.failed(Errors.KEY_NOT_FOUND[K](k, rangeBuilder.ks))
+        case None =>
+          Future.failed(Errors.KEY_NOT_FOUND[K](k, rangeBuilder.ks))
         case Some((last, kctx, lastVersion)) =>
 
           val idx = list.indexWhere{case (k, _) => ord.gt(k, last)}
           if(idx > 0) list = list.slice(0, idx)
 
           removeFromLeaf(last, kctx, lastVersion, list, removalVersion)
-      }.flatMap { n =>
-        pos += n
+      }.flatMap { r =>
+        pos += r.n
 
         //ctx.num_elements += n
         remove()
@@ -512,12 +513,14 @@ final class ClusterIndex[K, V](val descriptor: IndexContext)
     getRange(kctx.rangeId).flatMap { l =>
       l.copy(sameId = true)
     }.flatMap { range =>
-      range.execute(Seq(Commands.Update(kctx.rangeId, data, Some(updateVersion)))).map { r =>
-        assert(r.success)
+      range.execute(Seq(Commands.Update(kctx.rangeId, data, Some(updateVersion)))).flatMap {
 
-        ranges.update(kctx.rangeId, range)
+        case r if r.success =>
+          ranges.update(kctx.rangeId, range)
 
-        ClusterResult.UpdateResult(r.success, r.n, r.error)
+          Future.successful(UpdateResult(true, data.length, None))
+
+        case r => Future.failed(r.error.get)
       }
     }
   }
