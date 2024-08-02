@@ -81,24 +81,30 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
     }
   }
 
-  protected def remove(keys: Seq[Tuple2[K, Option[String]]], removalVersion: String): Future[RemovalResult] = {
+  def remove(keys: Seq[Tuple2[K, Option[String]]], removalVersion: String): Future[RemovalResult] = {
     getLeaf().flatMap {
       case None => Future.failed(new RuntimeException("no range!"))
       case Some(leaf) =>
 
         val result = leaf.remove(keys)
 
-        if(!result.isSuccess){
+        /*if(!result.isSuccess){
           assert(false)
+        }*/
+
+        if(result.isSuccess){
+          ctx.root = Some(leaf.unique_id)
+          ctx.num_elements -= keys.length
+          ctx.parents.put(leaf.unique_id, ParentInfo())
+          ctx.levels = 1
+
+          Future.successful(RemovalResult(result.isSuccess, if(result.isSuccess) result.get else 0,
+            if(result.isSuccess) None else Some(result.failed.get)))
+        } else {
+          Future.failed(result.failed.get)
         }
 
-        ctx.root = Some(leaf.unique_id)
-        ctx.num_elements -= keys.length
-        ctx.parents.put(leaf.unique_id, ParentInfo())
-        ctx.levels = 1
 
-        Future.successful(RemovalResult(result.isSuccess, if(result.isSuccess) result.get else 0,
-          if(result.isSuccess) None else Some(result.failed.get)))
     }
   }
 
@@ -107,21 +113,18 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
       case None => Future.failed(new RuntimeException("no range!"))
       case Some(leaf) =>
 
-        val beforeList = leaf.inOrder()
-
         val result = leaf.update(data, updateVersion)
 
-        val afterList = leaf.inOrder()
-
-        val map1 = beforeList.map(x => x._1 -> x._2).toMap
-        val map2 = afterList.map(x => x._1 -> x._2).toMap
-
-        if(!result.isSuccess){
+        /*if(!result.isSuccess){
           assert(false)
-        }
+        }*/
 
-        Future.successful(UpdateResult(result.isSuccess, if(result.isSuccess) result.get else 0,
-          if(result.isSuccess) None else Some(result.failed.get)))
+        if(result.isSuccess){
+          Future.successful(UpdateResult(result.isSuccess, if(result.isSuccess) result.get else 0,
+            if(result.isSuccess) None else Some(result.failed.get)))
+        } else {
+          Future.failed(result.failed.get)
+        }
     }
   }
 
@@ -142,7 +145,9 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
         case cmd: Insert[K, V] => insert(cmd.list, cmd.version.getOrElse(version))
         case cmd: Remove[K, V] => remove(cmd.keys, cmd.version.getOrElse(version))
         case cmd: Update[K, V] => update(cmd.list, cmd.version.getOrElse(version))
-      }).flatMap(prev => process(pos + 1, prev.error, prev.n))
+      }).flatMap(prev => process(pos + 1, prev.error, prev.n))/*.recover {
+        case t => BatchResult(false, Some(t), 0)
+      }*/
     }
 
     process(0, None, 0)
@@ -201,6 +206,24 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
     }
   }
 
+  def copyLeaf(leaf: Leaf[K, V]): Leaf[K, V] = {
+    val pinfo = ctx.getParent(leaf.unique_id).get
+
+    val copy = ctx.createLeaf()
+    ctx.setParent(copy.unique_id, pinfo.key, pinfo.pos, pinfo.parent)
+
+    val len = leaf.tuples.length
+
+    for(i<-0 until len){
+      val (k, v, vs) = leaf.tuples(i)
+      copy.tuples = copy.tuples :+ Tuple3(k, v, vs)
+    }
+
+    copy.level = leaf.level
+
+    copy
+  }
+
   def copy(sameId: Boolean = false): Future[Range[K, V]] = {
     getLeaf().map {
       case None =>
@@ -210,7 +233,7 @@ class Range[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) {
       case Some(leaf) =>
         val descriptor = ctx.currentSnapshot()
 
-        val copy = leaf.copy()
+        val copy = leaf.copy()//copyLeaf(leaf)
 
         val range = new Range[K, V](
               descriptor
