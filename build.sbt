@@ -7,7 +7,7 @@ lazy val root = (project in file("."))
     name := "cluster-index"
   )
 
-val indexVersion = "0.32"
+val indexVersion = "0.34"
 
 ThisBuild / libraryDependencies ++= Seq(
   "org.scalactic" %% "scalactic" % "3.1.0",

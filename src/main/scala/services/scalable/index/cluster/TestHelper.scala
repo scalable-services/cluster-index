@@ -2,8 +2,7 @@ package services.scalable.index.cluster
 
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.config.{DefaultDriverOption, DriverConfigLoader}
-import TestConfig._
-import services.scalable.index.Bytes
+import services.scalable.index.cluster.TestConfig._
 
 object TestHelper {
 

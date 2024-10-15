@@ -2,21 +2,24 @@ package services.scalable.index.cluster
 
 import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
+import org.scalatest.matchers.should.Matchers
 import org.slf4j.LoggerFactory
-import services.scalable.index.Commands._
+import services.scalable.index.Commands.{Command, Insert, Remove, Update}
 import services.scalable.index.grpc.IndexContext
-import services.scalable.index.{Bytes, DefaultComparators, DefaultSerializers, IndexBuilder}
-import services.scalable.index.impl.{CassandraStorage, DefaultCache, MemoryStorage}
+import services.scalable.index.impl.{DefaultCache, MemoryStorage}
+import services.scalable.index.{DefaultComparators, DefaultSerializers, IndexBuilder, QueryableIndex}
 
 import java.util.UUID
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
-object Main {
+class IndexSpec extends Repeatable with Matchers {
 
-  def main(args: Array[String]): Unit = {
+  val logger = LoggerFactory.getLogger(this.getClass)
 
-    val logger = LoggerFactory.getLogger(this.getClass)
+  override val times: Int = 1000
+
+  "operations" should " run successfully" in {
 
     val rand = ThreadLocalRandom.current()
     import scala.concurrent.ExecutionContext.Implicits.global
@@ -24,27 +27,27 @@ object Main {
     type K = String
     type V = String
 
-    val NUM_LEAF_ENTRIES = 16//rand.nextInt(4, 64)
-    val NUM_META_ENTRIES = 16//rand.nextInt(4, 64)
+    val NUM_LEAF_ENTRIES = rand.nextInt(4, 64)
+    val NUM_META_ENTRIES = rand.nextInt(4, 64)
 
     val indexId = "index1"
 
     implicit val ord = DefaultComparators.ordString
     val version = "v1"
 
-   // val session = TestHelper.createCassandraSession()
+    // val session = TestHelper.createCassandraSession()
     val storage = /*new CassandraStorage(session, true)*/ new MemoryStorage()
 
-    val MAX_ITEMS = 200000
+    //val MAX_ITEMS = 200000
 
     val indexContext = IndexContext()
       .withId(indexId)
       .withLevels(0)
       .withNumElements(0)
-      .withMaxNItems(MAX_ITEMS)
+      .withMaxNItems(Int.MaxValue)
       .withLastChangeVersion(UUID.randomUUID().toString)
-      .withNumLeafItems(MAX_ITEMS)
-      .withNumMetaItems(MAX_ITEMS)
+      .withNumLeafItems(NUM_LEAF_ENTRIES)
+      .withNumMetaItems(NUM_META_ENTRIES)
 
     val cache = new DefaultCache()
 
@@ -98,7 +101,7 @@ object Main {
 
       val keys = data.map(_._1)
       var toRemoveRandom = (if(keys.length > 1) scala.util.Random.shuffle(keys).slice(0, rand.nextInt(1, keys.length))
-        else keys).map { _ -> Some(version)}
+      else keys).map { _ -> Some(version)}
 
       val removalError = rand.nextInt(1, 100) match {
         case i if i % 7 == 0 =>
@@ -120,7 +123,7 @@ object Main {
       }
 
       var toUpdateRandom = (if(data.length > 1) scala.util.Random.shuffle(data).slice(0, rand.nextInt(1, data.length))
-        else data).map { case (k, v) => (k, RandomStringUtils.randomAlphabetic(10), Some(version))}
+      else data).map { case (k, v) => (k, RandomStringUtils.randomAlphabetic(10), Some(version))}
 
       val updateError = rand.nextInt(1, 100) match {
         case i if i % 13 == 0 =>
@@ -136,18 +139,18 @@ object Main {
       !updateError -> Seq(Update(indexId, toUpdateRandom, Some(version)))
     }
 
-    val runtimes = rand.nextInt(5, 50)
+    val runtimes = rand.nextInt(5, 100)
     var data = Seq.empty[(K, V)]
 
     for(j<-0 until runtimes){
 
       val ctx = Await.result(storage.loadIndex(indexId), Duration.Inf).get
-      val range = new LeafRange[K, V](ctx)(rangeBuilder)
-      var indexData = range.inOrderSync().map(x => (x._1, x._2))
+      val index = new QueryableIndex[K, V](ctx)(rangeBuilder)
+      var indexData = index.allSync().map(x => (x._1, x._2))
 
       println(s"indexData: ${indexData.length}")
 
-      val nCommands = rand.nextInt(1, 20)
+      val nCommands = rand.nextInt(1, 100)
       var cmds = Seq.empty[Command[K, V]]
 
       for(i<-0 until nCommands){
@@ -187,13 +190,14 @@ object Main {
         })
       }
 
-      val r0 = Await.result(range.execute(cmds, version), Duration.Inf)
+      val r0 = Await.result(index.execute(cmds, version), Duration.Inf)
 
       if(!r0.success){
         println(r0.error.get.getClass)
         //assert(false)
       } else {
 
+        // When everything is ok (all or nothing) executes it...
         for(i<-0 until cmds.length){
           cmds(i) match {
             case cmd: Update[K, V] =>
@@ -213,21 +217,22 @@ object Main {
           }
         }
 
-        Await.result(range.save(), Duration.Inf)
+        Await.result(index.save(), Duration.Inf)
       }
     }
 
     val ctx = Await.result(storage.loadIndex(indexId), Duration.Inf).get
-    val range = new LeafRange[K, V](ctx)(rangeBuilder)
+    val index = new QueryableIndex[K, V](ctx)(rangeBuilder)
 
-    val indexSortedKeys = range.inOrderSync().map{case (k, v, _) => (k, v)}.toList
+    val indexSortedKeys = index.allSync().map{case (k, v, _) => (k, v)}.toList
     val refDataSortedKeys = data.sortBy(_._1).map{case (k, v) => (k, v)}.toList
 
     if(indexSortedKeys != refDataSortedKeys){
       assert(false)
+    } else {
+      assert(true)
     }
 
-    //session.close()
   }
 
 }

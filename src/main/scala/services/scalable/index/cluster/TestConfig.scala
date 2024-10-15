@@ -11,5 +11,4 @@ object TestConfig {
   val NUM_META_ENTRIES = 16
   val MAX_ITEMS = 100
 
-
 }
