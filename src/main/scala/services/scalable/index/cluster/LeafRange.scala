@@ -3,14 +3,15 @@ package services.scalable.index.cluster
 import services.scalable.index.Commands.{Insert, Remove, Update}
 import services.scalable.index.Errors.DUPLICATED_KEYS
 import services.scalable.index.cluster.ClusterResult.{BatchResult, InsertionResult, RemovalResult, UpdateResult}
-import services.scalable.index.grpc.IndexContext
+import services.scalable.index.grpc.{IndexContext, RootRef}
 import services.scalable.index.{Commands, Context, IndexBuilt, Leaf, ParentInfo}
 
+import java.util.UUID
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
 import scala.util.{Failure, Success}
 
-class LeafRange[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) extends Range[K, V] {
+class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V]) extends Range[K, V] {
 
   import builder._
 
@@ -178,7 +179,11 @@ class LeafRange[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) e
   override def isFull(): Future[Boolean] = {
     getLeaf().map {
       case None => true
-      case Some(leaf) => leaf.isFull()
+      case Some(leaf) =>
+
+        println(leaf.unique_id, leaf.MAX, leaf.isFull(), "len ", leaf.length)
+
+        leaf.isFull()
     }
   }
 
@@ -224,5 +229,76 @@ class LeafRange[K, V](descriptor: IndexContext)(val builder: IndexBuilt[K, V]) e
     }
   }
 
+  override def merge(block: Range[K, V], version: String): Future[Range[K, V]] = {
+    val b = block.asInstanceOf[LeafRange[K, V]]
 
+    getLeaf().map(_.get).map(_.copy()).flatMap { thisLeaf =>
+      b.getLeaf().map(_.get).map(_.copy()).map { blockLeaf =>
+        thisLeaf.merge(blockLeaf, version)
+
+        ctx.root = Some(thisLeaf.unique_id)
+        ctx.num_elements = thisLeaf.length
+
+        this
+      }
+    }
+  }
+
+  override def split(): Future[Range[K, V]] = {
+    getLeaf().map(_.get).map(_.copy()).map { thisLeaf =>
+      val rightLeaf = thisLeaf.split()
+
+      ctx.root = Some(thisLeaf.unique_id)
+      ctx.num_elements = thisLeaf.length
+
+      val right = new LeafRange[K, V](descriptor
+        .withId(UUID.randomUUID().toString)
+        .withNumElements(rightLeaf.length)
+        .withRoot(RootRef(rightLeaf.partition, rightLeaf.id))
+        .withLastChangeVersion(UUID.randomUUID().toString))(builder)
+
+      right.ctx.root = Some(rightLeaf.unique_id)
+      right.ctx.num_elements = rightLeaf.length
+
+      println(s"left splitting: ${ctx.indexId}, right splitting: ", right.ctx.indexId)
+
+      right
+    }
+  }
+
+  override def copy(sameId: Boolean = false): Future[Range[K, V]] = {
+    getLeaf()/*.map(_.map(_.copy()))*/.map { thisLeafOpt =>
+      val copy = new LeafRange[K, V](descriptor
+        .withId(if(sameId) ctx.indexId else UUID.randomUUID().toString)
+        .withNumElements(ctx.num_elements)
+      )(builder)
+
+      copy.ctx.root = thisLeafOpt.map(_.unique_id)
+
+      copy
+    }
+  }
+
+  override def max(): Future[Option[(K, V, String)]] = {
+    getLeaf().map {
+      case None => None
+      case Some(leaf) => leaf.max()
+    }
+  }
+
+  override def min(): Future[Option[(K, V, String)]] = {
+    getLeaf().map {
+      case None => None
+      case Some(leaf) => leaf.min()
+    }
+  }
+
+  override def length(): Future[Long] = {
+    getLeaf().map {
+      case None =>
+        println("range does not exist!!!")
+        0L
+      case Some(leaf) => leaf.length
+    }
+  }
 }

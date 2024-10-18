@@ -2,21 +2,25 @@ package services.scalable.index.cluster
 
 import io.netty.util.internal.ThreadLocalRandom
 import org.apache.commons.lang3.RandomStringUtils
+import org.scalatest.matchers.should.Matchers
 import org.slf4j.LoggerFactory
-import services.scalable.index.Commands._
+import services.scalable.index.Commands.{Command, Insert, Remove, Update}
+import services.scalable.index.cluster.grpc.KeyIndexContext
 import services.scalable.index.grpc.IndexContext
-import services.scalable.index.{Bytes, DefaultComparators, DefaultSerializers, IndexBuilder}
-import services.scalable.index.impl.{CassandraStorage, DefaultCache, MemoryStorage}
+import services.scalable.index.impl.{DefaultCache, MemoryStorage}
+import services.scalable.index.{DefaultComparators, DefaultSerializers, IndexBuilder, QueryableIndex}
 
 import java.util.UUID
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
-object Main {
+class ClusterSpec extends Repeatable with Matchers {
 
-  def main(args: Array[String]): Unit = {
+  val logger = LoggerFactory.getLogger(this.getClass)
 
-    val logger = LoggerFactory.getLogger(this.getClass)
+  override val times: Int = 1
+
+  "operations" should " run successfully" in {
 
     val rand = ThreadLocalRandom.current()
     import scala.concurrent.ExecutionContext.Implicits.global
@@ -27,29 +31,29 @@ object Main {
     val NUM_LEAF_ENTRIES = 16//rand.nextInt(4, 64)
     val NUM_META_ENTRIES = 16//rand.nextInt(4, 64)
 
-    val indexId = "index1"
+    val clusterIndexId = "cindex1"
 
     implicit val ord = DefaultComparators.ordString
     val version = "v1"
 
-   // val session = TestHelper.createCassandraSession()
+    // val session = TestHelper.createCassandraSession()
     val storage = /*new CassandraStorage(session, true)*/ new MemoryStorage()
 
-    val MAX_ITEMS = 200000
+    val MAX_ITEMS = 256//rand.nextInt(128, 512)
 
-    val indexContext = IndexContext()
-      .withId(indexId)
+    val metaContext = IndexContext()
+      .withId(clusterIndexId)
       .withLevels(0)
       .withNumElements(0)
-      .withMaxNItems(MAX_ITEMS)
+      .withMaxNItems(-1L)
       .withLastChangeVersion(UUID.randomUUID().toString)
-      .withNumLeafItems(MAX_ITEMS)
-      .withNumMetaItems(MAX_ITEMS)
+      .withNumLeafItems(NUM_LEAF_ENTRIES)
+      .withNumMetaItems(NUM_META_ENTRIES)
 
     val cache = new DefaultCache()
 
     val rangeBuilder = IndexBuilder.create[K, V](global, DefaultComparators.ordString,
-        indexContext.numLeafItems, indexContext.numMetaItems, indexContext.maxNItems,
+        MAX_ITEMS, MAX_ITEMS, MAX_ITEMS,
         DefaultSerializers.stringSerializer, DefaultSerializers.stringSerializer)
       .storage(storage)
       .cache(cache)
@@ -57,7 +61,16 @@ object Main {
       .keyToStringConverter(k => k)
       .build()
 
-    Await.result(storage.loadOrCreate(indexContext), Duration.Inf)
+    val clusterBuilder = IndexBuilder.create[K, KeyIndexContext](global, DefaultComparators.ordString,
+        metaContext.numLeafItems, metaContext.numMetaItems, metaContext.maxNItems,
+        DefaultSerializers.stringSerializer, ClusterSerializers.keyIndexSerializer)
+      .storage(storage)
+      .cache(cache)
+      .serializer(ClusterSerializers.grpcStringKeyIndexContextSerializer)
+      .keyToStringConverter(k => k)
+      .build()
+
+    Await.result(storage.loadOrCreate(metaContext), Duration.Inf)
 
     def insert(data: Seq[(K, V)], upsert: Boolean = false): (Boolean, Seq[Command[K, V]]) = {
       val n = rand.nextInt(100, 1000)
@@ -78,7 +91,7 @@ object Main {
         return true -> Seq.empty[Command[K, V]]
       }
 
-      val insertDups = rand.nextInt(1, 100) % 7 == 0
+      val insertDups = false//rand.nextInt(1, 100) % 7 == 0
 
       println(s"${Console.GREEN}INSERTING...${Console.RESET}")
 
@@ -86,73 +99,27 @@ object Main {
         list = list :+ list.head
       }
 
-      !insertDups -> Seq(Insert(indexId, list, Some(version)))
+      !insertDups -> Seq(Insert(clusterIndexId, list, Some(version)))
     }
 
-    def remove(data: Seq[(K, V)]): (Boolean, Seq[Command[K, V]]) = {
-
-      if(data.isEmpty) {
-        println("no data to remove! Index is empty already!")
-        return true -> Seq.empty[Command[K, V]]
-      }
-
-      val keys = data.map(_._1)
-      var toRemoveRandom = (if(keys.length > 1) scala.util.Random.shuffle(keys).slice(0, rand.nextInt(1, keys.length))
-        else keys).map { _ -> Some(version)}
-
-      val removalError = rand.nextInt(1, 100) match {
-        case i if i % 7 == 0 =>
-          val elem = toRemoveRandom(0)
-          toRemoveRandom = toRemoveRandom :+ (elem._1 + "x" , elem._2)
-          true
-
-        case _ => false
-      }
-
-      println(s"${Console.RED_B}REMOVING...${Console.RESET}")
-      !removalError -> Seq(Remove(indexId, toRemoveRandom, Some(version)))
-    }
-
-    def update(data: Seq[(K, V)]): (Boolean, Seq[Command[K, V]]) = {
-      if(data.isEmpty) {
-        println("no data to update! Index is empty!")
-        return true -> Seq.empty[Command[K, V]]
-      }
-
-      var toUpdateRandom = (if(data.length > 1) scala.util.Random.shuffle(data).slice(0, rand.nextInt(1, data.length))
-        else data).map { case (k, v) => (k, RandomStringUtils.randomAlphabetic(10), Some(version))}
-
-      val updateError = rand.nextInt(1, 100) match {
-        case i if i % 13 == 0 =>
-          val elem = toUpdateRandom(0)
-          toUpdateRandom = toUpdateRandom :+ (elem._1 + "x" , elem._2, elem._3)
-          true
-
-        case _ => false
-      }
-
-      println(s"${Console.BLUE_B}UPDATING...${Console.RESET}")
-
-      !updateError -> Seq(Update(indexId, toUpdateRandom, Some(version)))
-    }
-
-    val runtimes = rand.nextInt(5, 50)
+    val runtimes = 5//rand.nextInt(5, 100)
     var data = Seq.empty[(K, V)]
 
     for(j<-0 until runtimes){
 
-      val ctx = Await.result(storage.loadIndex(indexId), Duration.Inf).get
-      val range = new LeafRange[K, V](ctx)(rangeBuilder)
-      var indexData = range.inOrderSync().map(x => (x._1, x._2))
+      val ctx = Await.result(storage.loadIndex(clusterIndexId), Duration.Inf).get
+
+      val cindex = new ClusterIndex[K, V](ctx)(rangeBuilder, clusterBuilder)
+      var indexData = cindex.inOrderSync().map(x => (x._1, x._2))
 
       println(s"indexData: ${indexData.length}")
 
-      val nCommands = rand.nextInt(1, 20)
+      val nCommands = 10//rand.nextInt(1, 100)
       var cmds = Seq.empty[Command[K, V]]
 
       for(i<-0 until nCommands){
         cmds ++= (rand.nextInt(1, 10000) match {
-          case i if !indexData.isEmpty && i % 3 == 0 =>
+          /*case i if !indexData.isEmpty && i % 3 == 0 =>
 
             val (ok, cmds) = update(indexData)
 
@@ -173,7 +140,7 @@ object Main {
               indexData = indexData.filterNot{case (k, v) => list.exists{case (k1, _) => ord.equiv(k, k1)}}
             }
 
-            cmds
+            cmds*/
 
           case _ =>
             val (ok, cmds) = insert(indexData)
@@ -187,13 +154,14 @@ object Main {
         })
       }
 
-      val r0 = Await.result(range.execute(cmds, version), Duration.Inf)
+      val r0 = Await.result(cindex.execute(cmds, version), Duration.Inf)
 
       if(!r0.success){
         println(r0.error.get.getClass)
-        //assert(false)
+        assert(false)
       } else {
 
+        // When everything is ok (all or nothing) executes it...
         for(i<-0 until cmds.length){
           cmds(i) match {
             case cmd: Update[K, V] =>
@@ -213,21 +181,26 @@ object Main {
           }
         }
 
-        Await.result(range.save(), Duration.Inf)
+        Await.result(cindex.save(), Duration.Inf)
+
+        //val indexSortedKeys = cindex.inOrderSync().map{case (k, v, _) => (k, v)}.toList
+
+        println()
       }
     }
 
-    val ctx = Await.result(storage.loadIndex(indexId), Duration.Inf).get
-    val range = new LeafRange[K, V](ctx)(rangeBuilder)
+    val ctx = Await.result(storage.loadIndex(clusterIndexId), Duration.Inf).get
+    val cindex = new ClusterIndex[K, V](ctx)(rangeBuilder, clusterBuilder)
 
-    val indexSortedKeys = range.inOrderSync().map{case (k, v, _) => (k, v)}.toList
+    val indexSortedKeys = cindex.inOrderSync().map{case (k, v, _) => (k, v)}.toList
     val refDataSortedKeys = data.sortBy(_._1).map{case (k, v) => (k, v)}.toList
 
     if(indexSortedKeys != refDataSortedKeys){
       assert(false)
+    } else {
+      assert(true)
     }
 
-    //session.close()
   }
 
 }
