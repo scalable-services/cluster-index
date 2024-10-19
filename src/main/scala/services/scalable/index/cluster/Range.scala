@@ -16,12 +16,15 @@ trait Range[K, V] {
   def isFull(): Future[Boolean]
   def hasMinimum(): Future[Boolean]
   def hasEnough(): Future[Boolean]
-  def borrow(target: Range[K, V]): Future[Boolean]
+  def borrow(target: Range[K, V]): Future[Range[K, V]]
   def merge(block: Range[K, V], version: String): Future[Range[K, V]]
   def split(): Future[Range[K, V]]
   def copy(sameId: Boolean = false): Future[Range[K, V]]
   def max(): Future[Option[(K, V, String)]]
   def min(): Future[Option[(K, V, String)]]
   def length(): Future[Long]
+  def canBorrow(n: Int): Future[Boolean]
+  def canMerge(r: Range[K, V]): Boolean
+  def missingToMin(): Int
 
 }

@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory
 import services.scalable.index.Commands.{Command, Insert, Remove, Update}
 import services.scalable.index.cluster.grpc.KeyIndexContext
 import services.scalable.index.grpc.IndexContext
-import services.scalable.index.impl.{DefaultCache, MemoryStorage}
+import services.scalable.index.impl.{CassandraStorage, DefaultCache, MemoryStorage}
 import services.scalable.index.{DefaultComparators, DefaultSerializers, IndexBuilder, QueryableIndex}
 
 import java.util.UUID
@@ -36,7 +36,7 @@ class ClusterSpec extends Repeatable with Matchers {
     implicit val ord = DefaultComparators.ordString
     val version = "v1"
 
-    // val session = TestHelper.createCassandraSession()
+    //val session = TestHelper.createCassandraSession()
     val storage = /*new CassandraStorage(session, true)*/ new MemoryStorage()
 
     val MAX_ITEMS = 256//rand.nextInt(128, 512)
@@ -72,6 +72,30 @@ class ClusterSpec extends Repeatable with Matchers {
 
     Await.result(storage.loadOrCreate(metaContext), Duration.Inf)
 
+    def remove(data: Seq[(K, V)]): (Boolean, Seq[Command[K, V]]) = {
+
+      if(data.isEmpty) {
+        println("no data to remove! Index is empty already!")
+        return true -> Seq.empty[Command[K, V]]
+      }
+
+      val keys = data.map(_._1)
+      var toRemoveRandom = (if(keys.length > 1) scala.util.Random.shuffle(keys).slice(0, rand.nextInt(1, keys.length))
+      else keys).map { _ -> Some(version)}
+
+      val removalError = false/*rand.nextInt(1, 100) match {
+        case i if i % 7 == 0 =>
+          val elem = toRemoveRandom(0)
+          toRemoveRandom = toRemoveRandom :+ (elem._1 + "x" , elem._2)
+          true
+
+        case _ => false
+      }*/
+
+      println(s"${Console.RED_B}REMOVING...${Console.RESET}")
+      !removalError -> Seq(Remove(clusterIndexId, toRemoveRandom, Some(version)))
+    }
+
     def insert(data: Seq[(K, V)], upsert: Boolean = false): (Boolean, Seq[Command[K, V]]) = {
       val n = rand.nextInt(100, 1000)
       var list = Seq.empty[(K, V, Boolean)]
@@ -102,7 +126,7 @@ class ClusterSpec extends Repeatable with Matchers {
       !insertDups -> Seq(Insert(clusterIndexId, list, Some(version)))
     }
 
-    val runtimes = 5//rand.nextInt(5, 100)
+    val runtimes = rand.nextInt(5, 100)
     var data = Seq.empty[(K, V)]
 
     for(j<-0 until runtimes){
@@ -114,7 +138,7 @@ class ClusterSpec extends Repeatable with Matchers {
 
       println(s"indexData: ${indexData.length}")
 
-      val nCommands = 10//rand.nextInt(1, 100)
+      val nCommands = rand.nextInt(1, 100)
       var cmds = Seq.empty[Command[K, V]]
 
       for(i<-0 until nCommands){
@@ -129,7 +153,7 @@ class ClusterSpec extends Repeatable with Matchers {
               indexData = indexData ++ list.map(x => x._1 -> x._2)
             }
 
-            cmds
+            cmds*/
 
           case i if !indexData.isEmpty && i % 5 == 0 =>
 
@@ -140,7 +164,7 @@ class ClusterSpec extends Repeatable with Matchers {
               indexData = indexData.filterNot{case (k, v) => list.exists{case (k1, _) => ord.equiv(k, k1)}}
             }
 
-            cmds*/
+            cmds
 
           case _ =>
             val (ok, cmds) = insert(indexData)
@@ -200,6 +224,8 @@ class ClusterSpec extends Repeatable with Matchers {
     } else {
       assert(true)
     }
+
+    Await.result(storage.close(), Duration.Inf)
 
   }
 

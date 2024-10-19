@@ -205,7 +205,7 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
     ctx.save()
   }
 
-  override def borrow(target: Range[K, V]): Future[Boolean] = {
+  override def borrow(target: Range[K, V]): Future[Range[K, V]] = {
     val t = target.asInstanceOf[LeafRange[K, V]]
 
     assert(t.ctx.num_elements < t.builder.MAX_N_ITEMS/2)
@@ -224,16 +224,23 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
         t.ctx.root = Some(targetLeaf.unique_id)
         t.ctx.num_elements = targetLeaf.length
 
-        true
+        this
       }
     }
+  }
+
+  protected def setMissingParent(x: Leaf[K, V]): Leaf[K, V] = {
+    ctx.parents.put(x.unique_id, ParentInfo())
+    x
   }
 
   override def merge(block: Range[K, V], version: String): Future[Range[K, V]] = {
     val b = block.asInstanceOf[LeafRange[K, V]]
 
-    getLeaf().map(_.get).map(_.copy()).flatMap { thisLeaf =>
-      b.getLeaf().map(_.get).map(_.copy()).map { blockLeaf =>
+    assert(b.ctx.num_elements > 0)
+
+    getLeaf().map(_.get).map(setMissingParent).map(_.copy()).flatMap { thisLeaf =>
+      b.getLeaf().map(_.get).map(setMissingParent).map { blockLeaf =>
         thisLeaf.merge(blockLeaf, version)
 
         ctx.root = Some(thisLeaf.unique_id)
@@ -300,5 +307,20 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
         0L
       case Some(leaf) => leaf.length
     }
+  }
+
+  override def canBorrow(n: Int): Future[Boolean] = {
+    getLeaf().map {
+      case None => false
+      case Some(leaf) => leaf.length - n >= leaf.MIN
+    }
+  }
+
+  override def missingToMin(): Int = {
+    (builder.MAX_N_ITEMS/2 - ctx.num_elements).toInt
+  }
+
+  override def canMerge(r: Range[K, V]): Boolean = {
+    ctx.num_elements + r.asInstanceOf[LeafRange[K, V]].ctx.num_elements <= builder.MAX_N_ITEMS
   }
 }
