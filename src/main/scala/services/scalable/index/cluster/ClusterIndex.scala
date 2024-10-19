@@ -3,7 +3,7 @@ package services.scalable.index.cluster
 import com.google.protobuf.ByteString
 import services.scalable.index.Commands.{Insert, Remove, Update}
 import services.scalable.index.Errors.IndexError
-import services.scalable.index.cluster.ClusterResult.{BatchResult, InsertionResult, RemovalResult}
+import services.scalable.index.cluster.ClusterResult.{BatchResult, InsertionResult, RemovalResult, UpdateResult}
 import services.scalable.index.cluster.grpc.KeyIndexContext
 import services.scalable.index.{Commands, Errors, IndexBuilt, QueryableIndex}
 import services.scalable.index.grpc.{IndexContext, RootRef}
@@ -307,6 +307,9 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
                               removalVersion: String, n: Int): Future[RemovalResult] = {
 
     if(range.ctx.num_elements == 0){
+
+      println(s"${Console.RED_B}no elements left! Removing the range...${Console.RESET}")
+
       return meta.execute(Seq(
         Remove(kctx.rangeId, Seq(lastKey -> Some(lastVersion))
       ))).map { cr =>
@@ -346,16 +349,16 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
       }
     }
 
-    def choose(leftRange: Option[(Range[K, V], K, KeyIndexContext, String)],
+    def tryMerge(leftRange: Option[(Range[K, V], K, KeyIndexContext, String)],
                righRange: Option[(Range[K, V], K, KeyIndexContext, String)]): Future[RemovalResult] = {
 
       if(leftRange.isDefined && leftRange.get._1.canMerge(range)) {
-        println(s"merging with left...")
+        println(s"${Console.RED_B}merging with left...${Console.RESET}")
         return merge(leftRange)
       }
 
       if(righRange.isDefined && righRange.get._1.canMerge(range)){
-        println(s"merging with right...")
+        println(s"${Console.MAGENTA_B}merging with right...${Console.RESET}")
         return merge(righRange)
       }
 
@@ -366,10 +369,66 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
       Future.successful(RemovalResult(true, n, None))
     }
 
+    def borrow(borrower: Option[(Range[K, V], K, KeyIndexContext, String)]): Future[RemovalResult] = {
+
+      borrower.get._1.borrow(range).map(_.asInstanceOf[LeafRange[K, V]]).flatMap { borrowed =>
+        borrowed.max().map(_.get).flatMap { mergedMax =>
+          range.max().map(_.get).flatMap { rangeMax =>
+
+            meta.execute(Seq(
+              Remove(kctx.rangeId, Seq(lastKey -> Some(lastVersion),
+                borrower.get._2 -> Some(borrower.get._4)),
+                Some(removalVersion)),
+
+              Insert(borrowed.ctx.indexId, Seq(
+                (mergedMax._1, KeyIndexContext()
+                  .withLastChangeVersion(borrowed.ctx.lastChangeVersion)
+                  .withRangeId(borrowed.ctx.indexId)
+                  .withKey(ByteString.copyFrom(rangeBuilder.keySerializer.serialize(mergedMax._1))), false),
+
+                (rangeMax._1, KeyIndexContext()
+                  .withLastChangeVersion(range.ctx.lastChangeVersion)
+                  .withRangeId(range.ctx.indexId)
+                  .withKey(ByteString.copyFrom(rangeBuilder.keySerializer.serialize(rangeMax._1))), false)),
+
+                Some(removalVersion))
+            )).map { cr =>
+
+              assert(cr.success)
+
+              ranges.update(kctx.rangeId, range)
+              ranges.update(borrowed.ctx.indexId, borrowed)
+
+              RemovalResult(true, n, None)
+            }
+
+          }
+        }
+      }
+    }
+
+    def tryBorrow(leftRange: Option[(Range[K, V], K, KeyIndexContext, String)],
+                 righRange: Option[(Range[K, V], K, KeyIndexContext, String)]): Future[RemovalResult] = {
+
+      if(leftRange.isDefined && leftRange.get._1.canBorrow(range)) {
+        println(s"${Console.CYAN_B}borrowing from left...${Console.RESET}")
+        return borrow(leftRange)
+      }
+
+      if(righRange.isDefined && righRange.get._1.canBorrow(range)){
+        println(s"${Console.YELLOW_B}borrowing from right...${Console.RESET}")
+        return borrow(righRange)
+      }
+
+      println("no one to borrow from trying to merge...")
+
+      tryMerge(leftRange, righRange)
+    }
+
     for {
       leftRange <- getLeftRange(lastKey)
       rightRange <- getRightRange(lastKey)
-      result <- choose(leftRange, rightRange)
+      result <- tryBorrow(leftRange, rightRange)
     } yield {
       result
     }
@@ -384,7 +443,7 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
           range.hasMinimum().flatMap {
             case true =>
 
-              println("simple removal...")
+              println(s"${Console.RED_B}simple removal...${Console.RESET}")
 
               ranges.update(range.ctx.indexId, range)
 
@@ -436,6 +495,60 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
     }
   }
 
+  def updateRange(kctx: KeyIndexContext, data: Seq[(K, V, Option[String])], updateVersion: String): Future[ClusterResult.UpdateResult] = {
+    getRange(kctx.rangeId).map(_.get).flatMap(_.copy(true).map(_.asInstanceOf[LeafRange[K, V]])).flatMap { range =>
+      range.execute(Seq(Commands.Update(kctx.rangeId, data, Some(updateVersion))), updateVersion).flatMap {
+
+        case r if r.success =>
+          ranges.update(kctx.rangeId, range)
+
+          Future.successful(UpdateResult(true, data.length, None))
+
+        case r => Future.failed(r.error.get)
+      }
+    }
+  }
+
+  def update(data: Seq[Tuple3[K, V, Option[String]]], updateVersion: String): Future[UpdateResult] = {
+
+    val sorted = data.sortBy(_._1)
+
+    if(sorted.exists{case (k, _, _) => sorted.count{case (k1, _, _) => ord.equiv(k, k1)} > 1}){
+      return Future.successful(UpdateResult(false, 0, Some(Errors.DUPLICATED_KEYS(sorted.map(_._1),
+        rangeBuilder.ks))))
+    }
+
+    val len = sorted.length
+    var pos = 0
+
+    def update(): Future[Int] = {
+      if(len == pos) return Future.successful(sorted.length)
+
+      var list = sorted.slice(pos, len)
+      val (k, _, _) = list(0)
+
+      findPath(k).flatMap {
+        case None => Future.failed(Errors.KEY_NOT_FOUND(k, rangeBuilder.ks))
+        case Some(sr) =>
+
+          val idx = list.indexWhere{case (k, _, _) => ord.gt(k, sr.lastKey)}
+          if(idx > 0) list = list.slice(0, idx)
+
+          updateRange(sr.rctx, list, updateVersion)
+      }.flatMap { r =>
+        pos += r.n
+        update()
+      }
+    }
+
+    update().map { n =>
+      UpdateResult(true, n)
+    }.recover {
+      case t: IndexError => UpdateResult(false, 0, Some(t))
+      case t: Throwable => throw t
+    }
+  }
+
   def execute(commands: Seq[Commands.Command[K, V]], version: String): Future[ClusterResult.BatchResult] = {
 
     def process(pos: Int, error: Option[Throwable], n: Int): Future[BatchResult] = {
@@ -452,7 +565,7 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
       (cmd match {
         case cmd: Insert[K, V] => insert(cmd.list, cmd.version.getOrElse(version))
         case cmd: Remove[K, V] => remove(cmd.keys, cmd.version.getOrElse(version))
-        //case cmd: Update[K, V] => update(cmd.list, cmd.version.getOrElse(version))
+        case cmd: Update[K, V] => update(cmd.list, cmd.version.getOrElse(version))
       }).flatMap(prev => process(pos + 1, prev.error, prev.n))
     }
 

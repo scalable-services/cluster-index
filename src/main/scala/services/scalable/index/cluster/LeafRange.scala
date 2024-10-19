@@ -210,9 +210,11 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
 
     assert(t.ctx.num_elements < t.builder.MAX_N_ITEMS/2)
 
-    val missingN = t.builder.MAX_N_ITEMS/2 - t.ctx.num_elements
+    val missingN = t.missingToMin()
 
-    assert(ctx.num_elements - missingN >= builder.MAX_N_ITEMS/2)
+    if(ctx.num_elements - missingN < builder.MAX_N_ITEMS/2){
+      assert(false)
+    }
 
     getLeaf().map(_.get).map(_.copy()).flatMap { thisLeaf =>
       t.getLeaf().map(_.get).map(_.copy()).map { targetLeaf =>
@@ -309,11 +311,8 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
     }
   }
 
-  override def canBorrow(n: Int): Future[Boolean] = {
-    getLeaf().map {
-      case None => false
-      case Some(leaf) => leaf.length - n >= leaf.MIN
-    }
+  override def canBorrow(r: Range[K, V]): Boolean = {
+    (ctx.num_elements - r.asInstanceOf[LeafRange[K, V]].missingToMin()) >= builder.MAX_N_ITEMS/2
   }
 
   override def missingToMin(): Int = {

@@ -126,6 +126,29 @@ class ClusterSpec extends Repeatable with Matchers {
       !insertDups -> Seq(Insert(clusterIndexId, list, Some(version)))
     }
 
+    def update(data: Seq[(K, V)]): (Boolean, Seq[Command[K, V]]) = {
+      if(data.isEmpty) {
+        println("no data to update! Index is empty!")
+        return true -> Seq.empty[Command[K, V]]
+      }
+
+      var toUpdateRandom = (if(data.length > 1) scala.util.Random.shuffle(data).slice(0, rand.nextInt(1, data.length))
+      else data).map { case (k, v) => (k, RandomStringUtils.randomAlphabetic(10), Some(version))}
+
+      val updateError = false/*rand.nextInt(1, 100) match {
+        case i if i % 13 == 0 =>
+          val elem = toUpdateRandom(0)
+          toUpdateRandom = toUpdateRandom :+ (elem._1 + "x" , elem._2, elem._3)
+          true
+
+        case _ => false
+      }*/
+
+      println(s"${Console.BLUE_B}UPDATING...${Console.RESET}")
+
+      !updateError -> Seq(Update(clusterIndexId, toUpdateRandom, Some(version)))
+    }
+
     val runtimes = rand.nextInt(5, 100)
     var data = Seq.empty[(K, V)]
 
@@ -143,7 +166,7 @@ class ClusterSpec extends Repeatable with Matchers {
 
       for(i<-0 until nCommands){
         cmds ++= (rand.nextInt(1, 10000) match {
-          /*case i if !indexData.isEmpty && i % 3 == 0 =>
+          case i if !indexData.isEmpty && i % 3 == 0 =>
 
             val (ok, cmds) = update(indexData)
 
@@ -153,7 +176,7 @@ class ClusterSpec extends Repeatable with Matchers {
               indexData = indexData ++ list.map(x => x._1 -> x._2)
             }
 
-            cmds*/
+            cmds
 
           case i if !indexData.isEmpty && i % 5 == 0 =>
 

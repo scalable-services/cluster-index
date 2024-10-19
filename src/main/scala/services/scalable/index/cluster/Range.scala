@@ -23,7 +23,7 @@ trait Range[K, V] {
   def max(): Future[Option[(K, V, String)]]
   def min(): Future[Option[(K, V, String)]]
   def length(): Future[Long]
-  def canBorrow(n: Int): Future[Boolean]
+  def canBorrow(r: Range[K, V]): Boolean
   def canMerge(r: Range[K, V]): Boolean
   def missingToMin(): Int
 
