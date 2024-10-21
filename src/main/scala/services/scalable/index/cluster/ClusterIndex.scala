@@ -56,7 +56,7 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
       }
       case someRange =>
 
-        println(s"found range ${id} in cache...")
+       // println(s"found range ${id} in cache...")
 
         Future.successful(someRange)
     }

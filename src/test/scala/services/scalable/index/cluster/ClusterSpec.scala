@@ -28,8 +28,8 @@ class ClusterSpec extends Repeatable with Matchers {
     type K = String
     type V = String
 
-    val NUM_LEAF_ENTRIES = 16//rand.nextInt(4, 64)
-    val NUM_META_ENTRIES = 16//rand.nextInt(4, 64)
+    val NUM_LEAF_ENTRIES = rand.nextInt(16, 64)
+    val NUM_META_ENTRIES = rand.nextInt(16, 64)
 
     val clusterIndexId = "cindex1"
 
@@ -39,7 +39,7 @@ class ClusterSpec extends Repeatable with Matchers {
     //val session = TestHelper.createCassandraSession()
     val storage = /*new CassandraStorage(session, true)*/ new MemoryStorage()
 
-    val MAX_ITEMS = 256//rand.nextInt(128, 512)
+    val MAX_ITEMS = rand.nextInt(256, 512)
 
     val metaContext = IndexContext()
       .withId(clusterIndexId)
