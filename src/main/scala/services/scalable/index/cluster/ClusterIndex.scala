@@ -7,6 +7,7 @@ import services.scalable.index.cluster.ClusterResult.{BatchResult, InsertionResu
 import services.scalable.index.cluster.grpc.KeyIndexContext
 import services.scalable.index.{Commands, Errors, IndexBuilt, QueryableIndex}
 import services.scalable.index.grpc.{IndexContext, RootRef}
+import services.scalable.index.impl.{DefaultCache, MemoryStorage}
 
 import java.util.UUID
 import scala.collection.concurrent.TrieMap
@@ -25,20 +26,43 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
   assert(rangeBuilder.MAX_META_ITEMS > 0)
   assert(rangeBuilder.MAX_LEAF_ITEMS > 0)
 
+  // Meta should be instantiated again in case of error inserting on it
+  val meta = new QueryableIndex[K, KeyIndexContext](metaDescriptor)(clusterBuilder)
+  val ranges = new TrieMap[String, LeafRange[K, V]]()
+  val newRanges = new TrieMap[String, LeafRange[K, V]]()
+
   def save(): Future[IndexContext] = {
     meta.save().flatMap { metaCtx =>
-      Future.sequence(newRanges.map{case (rid, range) => storage.createIndex(range.ctx.currentSnapshot())}).flatMap { _ =>
-        Future.sequence(ranges.map{case (rid, range) => range.save()}).map { _ =>
+
+      for(range <- ranges){
+        //cache.invalidate(range._2.ctx.root.get)
+        println(s"saving range ${range._1} length: ${Await.result(range._2.length(), Duration.Inf)} nelem: ${range._2.ctx.num_elements} root id: ${range._2.ctx.root.map(_._2)}")
+        if(Await.result(range._2.length(), Duration.Inf) != range._2.ctx.num_elements){
+          assert(false)
+        }
+      }
+
+      Future.sequence(newRanges.map{case (rid, range) => storage.createIndex(range.ctx.snapshot())}).flatMap { _ =>
+        Future.sequence(ranges.map{case (rid, range) => range.save()}).map { ranges =>
+          println(s"saving to storage:  ${ranges.map(x => x.id)}")
           metaCtx
         }
       }
     }
   }
 
-  // Meta should be instantiated again in case of error inserting on it
-  val meta = new QueryableIndex[K, KeyIndexContext](metaDescriptor)(clusterBuilder)
-  val ranges = new TrieMap[String, LeafRange[K, V]]()
-  val newRanges = new TrieMap[String, LeafRange[K, V]]()
+  protected def setNewRange(range: LeafRange[K, V]): Unit = {
+    newRanges.put(range.ctx.indexId, range)
+    upsertRange(range)
+  }
+
+  protected def upsertRange(range: LeafRange[K, V]): Unit = {
+    if(range.ctx.num_elements != Await.result(range.length(), Duration.Inf)){
+      assert(false)
+    }
+
+    ranges.put(range.ctx.indexId, range)
+  }
 
   protected def getRange(id: String): Future[Option[LeafRange[K, V]]] = {
     ranges.get(id) match {
@@ -51,10 +75,20 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
           case Some(ctx) =>
 
             val range = new LeafRange[K, V](ctx)(rangeBuilder)
-            ranges.putIfAbsent(id, range)
+            ranges.put(id, range)
+
+            if(range.ctx.num_elements != Await.result(range.length(), Duration.Inf)){
+              val s1 = storage.asInstanceOf[MemoryStorage]
+              val s2 = cache.get(range.ctx.root.get)
+
+              assert(false)
+            }
+
             Some(range)
       }
       case someRange =>
+
+        assert(someRange.get.ctx.num_elements == Await.result(someRange.get.length(), Duration.Inf))
 
        // println(s"found range ${id} in cache...")
 
@@ -94,8 +128,6 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
     range.execute(Seq(Insert(rangeCtx.id, slice, Some(insertVersion))), insertVersion).flatMap {
       case cr if cr.success => range.max().map(_.get).flatMap { case (maxKey, _, maxLastV) =>
 
-        //val metaCopy = new QueryableIndex[K, KeyIndexContext](metaDescriptor)(clusterBuilder)
-
         meta.execute(Seq(
           Insert(meta.ctx.indexId, Seq(Tuple3(maxKey,
             KeyIndexContext()
@@ -104,11 +136,13 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
               .withKey(ByteString.copyFrom(rangeBuilder.keySerializer.serialize(maxKey))), false)), Some(insertVersion))
         )).map { mbr =>
 
-          newRanges.put(range.ctx.indexId, range)
-          ranges.put(range.ctx.indexId, range)
+          //newRanges.put(range.ctx.indexId, range)
+          //ranges.put(range.ctx.indexId, range)
 
-          assert(range.ctx.root.isDefined)
-          assert(range.ctx.num_elements == Await.result(range.length(), Duration.Inf))
+          //assert(range.ctx.root.isDefined)
+          //assert(range.ctx.num_elements == Await.result(range.length(), Duration.Inf))
+
+          setNewRange(range)
 
           InsertionResult(cr.success, cr.n, mbr.error)
         }
@@ -139,10 +173,12 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
           range.insert(slice, insertVersion).map {
             case cr if cr.success =>
 
-            ranges.update(sr.rctx.rangeId, range)
+             // ranges.update(sr.rctx.rangeId, range)
 
-              assert(range.ctx.root.isDefined)
-              assert(range.ctx.num_elements == Await.result(range.length(), Duration.Inf))
+              //assert(range.ctx.root.isDefined)
+              //assert(range.ctx.num_elements == Await.result(range.length(), Duration.Inf))
+
+              upsertRange(range)
 
             InsertionResult(cr.success, cr.n, cr.error)
 
@@ -150,6 +186,7 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
         }
 
         case true => range.split().map(_.asInstanceOf[LeafRange[K, V]]).flatMap { right =>
+
           range.max().map(_.get).flatMap { rangeMax =>
             right.max().map(_.get).flatMap { rightMax =>
 
@@ -174,18 +211,19 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
                 case mbr if mbr.success =>
 
                   // meta = metaCopy
-                  val all = meta.allSync()
+                  //ranges.update(sr.rctx.rangeId, range)
+                  //ranges.put(right.ctx.indexId, right)
 
-                  ranges.update(sr.rctx.rangeId, range)
-                  ranges.put(right.ctx.indexId, right)
+                  //newRanges.put(right.ctx.indexId, right)
 
-                  newRanges.put(right.ctx.indexId, right)
+                  upsertRange(range)
+                  setNewRange(right)
 
-                  assert(right.ctx.root.isDefined)
+                  /*assert(right.ctx.root.isDefined)
                   assert(right.ctx.num_elements == Await.result(right.length(), Duration.Inf))
 
                   assert(range.ctx.root.isDefined)
-                  assert(range.ctx.num_elements == Await.result(range.length(), Duration.Inf))
+                  assert(range.ctx.num_elements == Await.result(range.length(), Duration.Inf))*/
 
                   InsertionResult(mbr.success, 0, None)
 
@@ -220,7 +258,7 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
         case None => insertEmpty(list, insertVersion)
         case Some(sr: KeySearchResult) =>
 
-          val idx = list.indexWhere{case (k, _, _) => ord.gt(k, sr.lastKey)}
+          val idx = list.indexWhere{ case (k, _, _) => ord.gt(k, sr.lastKey) }
           if(idx > 0) list = list.slice(0, idx)
 
           insertRange(sr, list, insertVersion)
@@ -290,7 +328,7 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
         /*storage.loadIndex(kctx.rangeId)*/
 
         // Copying here is crucial to work correctly
-        getRange(kctx.rangeId).map(_.get).flatMap(_.copy(true)).map{ r =>
+        getRange(kctx.rangeId).map(_.get).flatMap(_.copy(true)).map { r =>
 
           Some((r, kprev, kctx, lastK))
         }
@@ -316,6 +354,7 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
 
         assert(cr.success)
 
+        newRanges.remove(kctx.rangeId)
         ranges.remove(kctx.rangeId)
 
         RemovalResult(true, n, None)
@@ -341,7 +380,10 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
             assert(cr.success)
 
             ranges.remove(kctx.rangeId)
-            ranges.put(merged.ctx.indexId, merged)
+            newRanges.remove(kctx.rangeId)
+            upsertRange(merged)
+
+            //ranges.put(merged.ctx.indexId, merged)
 
             RemovalResult(true, n, None)
           }
@@ -364,7 +406,9 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
 
       println("no one to merge with...")
 
-      ranges.update(range.ctx.indexId, range)
+      //ranges.update(range.ctx.indexId, range)
+
+      upsertRange(range)
 
       Future.successful(RemovalResult(true, n, None))
     }
@@ -396,8 +440,11 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
 
               assert(cr.success)
 
-              ranges.update(kctx.rangeId, range)
-              ranges.update(borrowed.ctx.indexId, borrowed)
+              //ranges.update(kctx.rangeId, range)
+              //ranges.update(borrowed.ctx.indexId, borrowed)
+
+              upsertRange(range)
+              upsertRange(borrowed)
 
               RemovalResult(true, n, None)
             }
@@ -445,7 +492,9 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
 
               println(s"${Console.RED_B}simple removal...${Console.RESET}")
 
-              ranges.update(range.ctx.indexId, range)
+              //ranges.update(range.ctx.indexId, range)
+
+              upsertRange(range)
 
               Future.successful(RemovalResult(true, keys.length, None))
 
@@ -500,7 +549,9 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
       range.execute(Seq(Commands.Update(kctx.rangeId, data, Some(updateVersion))), updateVersion).flatMap {
 
         case r if r.success =>
-          ranges.update(kctx.rangeId, range)
+         // ranges.update(kctx.rangeId, range)
+
+          upsertRange(range)
 
           Future.successful(UpdateResult(true, data.length, None))
 
@@ -553,6 +604,14 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
 
     def process(pos: Int, error: Option[Throwable], n: Int): Future[BatchResult] = {
       if(error.isDefined) {
+        /*val dcache = cache.asInstanceOf[DefaultCache]
+
+        newRanges.foreach { case (_, r) =>
+          r.ctx.newBlocksReferences.foreach { case (b, _) =>
+            dcache.invalidate(b)
+          }
+        }*/
+
         return Future.successful(BatchResult(false, error))
       }
 

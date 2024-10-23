@@ -26,9 +26,9 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
   }
 
   def insertEmpty(data: Seq[(K, V, Boolean)], version: String): InsertionResult = {
-    if(data.distinctBy(_._1).length < data.length) {
+    /*if(data.distinctBy(_._1).length < data.length) {
       return InsertionResult(false, 0, Some(new Exception("Insertion list has duplicated items!")))
-    }
+    }*/
 
     val leaf = ctx.createLeaf()
     ctx.parents.put(leaf.unique_id, ParentInfo())
@@ -181,7 +181,7 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
       case None => true
       case Some(leaf) =>
 
-        println(leaf.unique_id, leaf.MAX, leaf.isFull(), "len ", leaf.length)
+        //println(leaf.unique_id, leaf.MAX, leaf.isFull(), "len ", leaf.length)
 
         leaf.isFull()
     }
@@ -226,6 +226,15 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
         t.ctx.root = Some(targetLeaf.unique_id)
         t.ctx.num_elements = targetLeaf.length
 
+        ctx.newBlocksReferences.foreach { case (bid, b) =>
+          t.ctx.newBlocksReferences.put(bid, b)
+        }
+
+        assert(ctx.num_elements == Await.result(length(), Duration.Inf))
+        assert(t.ctx.num_elements == Await.result(t.length(), Duration.Inf))
+
+        assert(!Await.result(isEmpty(), Duration.Inf))
+
         this
       }
     }
@@ -248,6 +257,12 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
         ctx.root = Some(thisLeaf.unique_id)
         ctx.num_elements = thisLeaf.length
 
+        b.ctx.root = Some(blockLeaf.unique_id)
+        b.ctx.num_elements = blockLeaf.length
+
+        assert(ctx.num_elements == Await.result(length(), Duration.Inf))
+        assert(b.ctx.num_elements == Await.result(b.length(), Duration.Inf))
+
         this
       }
     }
@@ -269,6 +284,10 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
       right.ctx.root = Some(rightLeaf.unique_id)
       right.ctx.num_elements = rightLeaf.length
 
+      ctx.newBlocksReferences.foreach { case (bid, b) =>
+        right.ctx.newBlocksReferences.put(bid, b)
+      }
+
       println(s"left splitting: ${ctx.indexId}, right splitting: ", right.ctx.indexId)
 
       right
@@ -276,16 +295,13 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
   }
 
   override def copy(sameId: Boolean = false): Future[Range[K, V]] = {
-    getLeaf()/*.map(_.map(_.copy()))*/.map { thisLeafOpt =>
-      val copy = new LeafRange[K, V](descriptor
-        .withId(if(sameId) ctx.indexId else UUID.randomUUID().toString)
-        .withNumElements(ctx.num_elements)
-      )(builder)
+    val copy = new LeafRange[K, V](ctx.currentSnapshot())(builder)
 
-      copy.ctx.root = thisLeafOpt.map(_.unique_id)
-
-      copy
+    ctx.newBlocksReferences.foreach { case (bid, b) =>
+      copy.ctx.newBlocksReferences.put(bid, b)
     }
+
+    Future.successful(copy)
   }
 
   override def max(): Future[Option[(K, V, String)]] = {
@@ -304,9 +320,7 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
 
   override def length(): Future[Long] = {
     getLeaf().map {
-      case None =>
-        println("range does not exist!!!")
-        0L
+      case None => 0L
       case Some(leaf) => leaf.length
     }
   }

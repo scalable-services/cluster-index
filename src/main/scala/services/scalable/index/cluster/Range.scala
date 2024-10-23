@@ -8,6 +8,8 @@ import scala.concurrent.Future
 
 trait Range[K, V] {
 
+  var isNew: Boolean = true
+
   def save(): Future[IndexContext]
   def execute(commands: Seq[Command[K, V]], version: String): Future[BatchResult]
   def inOrder(): Future[Seq[(K, V, String)]]
