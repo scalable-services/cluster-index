@@ -2,10 +2,25 @@ package services.scalable.index.cluster
 
 import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.config.{DefaultDriverOption, DriverConfigLoader}
-import TestConfig._
-import services.scalable.index.Bytes
+import services.scalable.index.cluster.TestConfig.{CQL_PWD, CQL_USER, KEYSPACE}
+
+import scala.concurrent.ExecutionContext
 
 object TestHelper {
+
+  /*val TX_VERSION = "v1"
+  val CLUSTER_INDEX_NAME = "index"
+  val MAX_LEAF_ITEMS = 32
+  val MAX_META_ITEMS = 32
+  val MAX_RANGE_ITEMS = 512L
+
+  val KEYSPACE = "history"*/
+
+  def truncateAll()(implicit session: CqlSession, ec: ExecutionContext): Unit = {
+    println("truncate ranges: ", session.execute("TRUNCATE TABLE ranges;").wasApplied())
+    println("truncate indexes: ", session.execute("TRUNCATE TABLE indexes;").wasApplied())
+    println("truncate indexes: ", session.execute("TRUNCATE TABLE blocks;").wasApplied())
+  }
 
   def createCassandraSession(): CqlSession = {
     val loader =

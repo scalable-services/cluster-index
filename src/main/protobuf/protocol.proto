@@ -11,10 +11,18 @@ option (scalapb.options) = {
     preserve_unknown_fields: false
 };
 
+message RangeDescriptor {
+    services.scalable.index.grpc.RootRef root = 1;
+    int64 nbr_elements = 2;
+    int32 max_items = 3;
+}
+
+/*
 message ClusterIndexContext {
     services.scalable.index.grpc.IndexContext metaCtx = 1;
     int64 rqnge_max_items = 2;
 }
+*/
 
 message KeyIndexContext {
     bytes key = 1;
@@ -30,3 +38,4 @@ message RangeIndexMeta {
     uint32 MIN = 5;
     uint32 MAX = 6;
 }
+

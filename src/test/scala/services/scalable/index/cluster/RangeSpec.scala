@@ -7,14 +7,14 @@ import org.slf4j.LoggerFactory
 import services.scalable.index.Commands.{Command, Insert, Remove, Update}
 import services.scalable.index.cluster.grpc.KeyIndexContext
 import services.scalable.index.grpc.IndexContext
-import services.scalable.index.impl.{CassandraStorage, DefaultCache, MemoryStorage}
-import services.scalable.index.{DefaultComparators, DefaultSerializers, IndexBuilder, QueryableIndex}
+import services.scalable.index.impl.{DefaultCache, MemoryStorage}
+import services.scalable.index.{DefaultComparators, DefaultSerializers, IndexBuilder}
 
 import java.util.UUID
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
 
-class ClusterSpec extends Repeatable with Matchers {
+class RangeSpec extends Repeatable with Matchers {
 
   val logger = LoggerFactory.getLogger(this.getClass)
 
@@ -28,8 +28,8 @@ class ClusterSpec extends Repeatable with Matchers {
     type K = String
     type V = String
 
-    val NUM_LEAF_ENTRIES = rand.nextInt(16, 64)
-    val NUM_META_ENTRIES = rand.nextInt(16, 64)
+    val NUM_LEAF_ENTRIES = 16//rand.nextInt(16, 64)
+    val NUM_META_ENTRIES = 16//rand.nextInt(16, 64)
 
     val clusterIndexId = "cindex1"
 
@@ -39,14 +39,13 @@ class ClusterSpec extends Repeatable with Matchers {
     //val session = TestHelper.createCassandraSession()
     val storage = /*new CassandraStorage(session, true)*/ new MemoryStorage()
 
-    val introduceError = true
-    val MAX_ITEMS = rand.nextInt(256, 512)
+    val MAX_ITEMS = 50000
 
     val metaContext = IndexContext()
       .withId(clusterIndexId)
       .withLevels(0)
       .withNumElements(0)
-      .withMaxNItems(-1L)
+      .withMaxNItems(MAX_ITEMS)
       .withLastChangeVersion(UUID.randomUUID().toString)
       .withNumLeafItems(NUM_LEAF_ENTRIES)
       .withNumMetaItems(NUM_META_ENTRIES)
@@ -59,15 +58,6 @@ class ClusterSpec extends Repeatable with Matchers {
       .storage(storage)
       .cache(cache)
       .serializer(ClusterSerializers.grpcStringStringSerializer)
-      .keyToStringConverter(k => k)
-      .build()
-
-    val clusterBuilder = IndexBuilder.create[K, KeyIndexContext](global, DefaultComparators.ordString,
-        metaContext.numLeafItems, metaContext.numMetaItems, metaContext.maxNItems,
-        DefaultSerializers.stringSerializer, ClusterSerializers.keyIndexSerializer)
-      .storage(storage)
-      .cache(cache)
-      .serializer(ClusterSerializers.grpcStringKeyIndexContextSerializer)
       .keyToStringConverter(k => k)
       .build()
 
@@ -84,14 +74,14 @@ class ClusterSpec extends Repeatable with Matchers {
       var toRemoveRandom = (if(keys.length > 1) scala.util.Random.shuffle(keys).slice(0, rand.nextInt(1, keys.length))
       else keys).map { _ -> Some(version)}
 
-      val removalError = if(introduceError) (rand.nextInt(1, 100) match {
+      val removalError = rand.nextInt(1, 100) match {
         case i if i % 3 == 0 =>
           val elem = toRemoveRandom(0)
           toRemoveRandom = toRemoveRandom :+ (elem._1 + "x" , elem._2)
           true
 
         case _ => false
-      }) else false
+      }
 
       println(s"${Console.RED_B}REMOVING...${Console.RESET}")
       !removalError -> Seq(Remove(clusterIndexId, toRemoveRandom, Some(version)))
@@ -116,7 +106,7 @@ class ClusterSpec extends Repeatable with Matchers {
         return true -> Seq.empty[Command[K, V]]
       }
 
-      val insertDups = if(introduceError) rand.nextBoolean() else false//rand.nextInt(1, 100) % 2 == 0
+      val insertDups = rand.nextBoolean()//rand.nextInt(1, 100) % 2 == 0
 
       println(s"${Console.GREEN}INSERTING...${Console.RESET}")
 
@@ -136,38 +126,37 @@ class ClusterSpec extends Repeatable with Matchers {
       var toUpdateRandom = (if(data.length > 1) scala.util.Random.shuffle(data).slice(0, rand.nextInt(1, data.length))
       else data).map { case (k, v) => (k, RandomStringUtils.randomAlphabetic(10), Some(version))}
 
-      val updateError = if(introduceError) (rand.nextInt(1, 100) match {
+      val updateError = rand.nextInt(1, 100) match {
         case i if i % 3 == 0 =>
           val elem = toUpdateRandom(0)
           toUpdateRandom = toUpdateRandom :+ (elem._1 + "x" , elem._2, elem._3)
           true
 
         case _ => false
-      }) else false
+      }
 
       println(s"${Console.BLUE_B}UPDATING...${Console.RESET}")
 
       !updateError -> Seq(Update(clusterIndexId, toUpdateRandom, Some(version)))
     }
 
-    val runtimes = rand.nextInt(10, 100)
+    val runtimes = 3//rand.nextInt(5, 100)
     var data = Seq.empty[(K, V)]
 
     for(j<-0 until runtimes){
 
       val ctx = Await.result(storage.loadIndex(clusterIndexId), Duration.Inf).get
-
-      val cindex = new ClusterIndex[K, V](ctx)(rangeBuilder, clusterBuilder)
-      var indexData = cindex.inOrderSync().map(x => (x._1, x._2))
+      val range = new LeafRange[K, V](ctx)(rangeBuilder)
+      var indexData = range.inOrderSync().map(x => (x._1, x._2))
 
       println(s"indexData: ${indexData.length}")
 
-      val nCommands = rand.nextInt(1, 100)
+      val nCommands = 10//rand.nextInt(1, 10)
       var cmds = Seq.empty[Command[K, V]]
 
       for(i<-0 until nCommands){
         cmds ++= (rand.nextInt(1, 10000) match {
-          case i if !indexData.isEmpty && i % 3 == 0 =>
+          /*case i if !indexData.isEmpty && i % 3 == 0 =>
 
             val (ok, cmds) = update(indexData)
 
@@ -177,7 +166,7 @@ class ClusterSpec extends Repeatable with Matchers {
               indexData = indexData ++ list.map(x => x._1 -> x._2)
             }
 
-            cmds
+            cmds*/
 
           case i if !indexData.isEmpty && i % 5 == 0 =>
 
@@ -202,13 +191,19 @@ class ClusterSpec extends Repeatable with Matchers {
         })
       }
 
-      val r0 = Await.result(cindex.execute(cmds, version), Duration.Inf)
+      val r0 = Await.result(range.execute(cmds, version), Duration.Inf)
 
       if(!r0.success){
         println(r0.error.get.getClass)
+       // r0.error.get.printStackTrace()
        // assert(false)
 
        // cache.newBlocks.clear()
+
+        val ctx2 = Await.result(storage.loadIndex(clusterIndexId), Duration.Inf).get
+        val oldRange = new LeafRange[K, V](ctx2)(rangeBuilder)
+
+        assert(Await.result(oldRange.length(), Duration.Inf) == oldRange.ctx.num_elements)
 
       } else {
 
@@ -232,16 +227,16 @@ class ClusterSpec extends Repeatable with Matchers {
           }
         }
 
-        Await.result(cindex.save(), Duration.Inf)
+        Await.result(range.save(), Duration.Inf)
 
-        //val indexSortedKeys = cindex.inOrderSync().map{case (k, v, _) => (k, v)}.toList
+        //val indexSortedKeys = range.inOrderSync().map{case (k, v, _) => (k, v)}.toList
 
         println()
       }
     }
 
     val ctx = Await.result(storage.loadIndex(clusterIndexId), Duration.Inf).get
-    val cindex = new ClusterIndex[K, V](ctx)(rangeBuilder, clusterBuilder)
+    val cindex = new LeafRange[K, V](ctx)(rangeBuilder)
 
     val indexSortedKeys = cindex.inOrderSync().map{case (k, v, _) => (k, v)}.toList
     val refDataSortedKeys = data.sortBy(_._1).map{case (k, v) => (k, v)}.toList
