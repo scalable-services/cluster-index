@@ -75,6 +75,8 @@ final class ClusterIndex[K, V](val metaDescriptor: IndexContext)
           case Some(ctx) =>
 
             val range = new LeafRange[K, V](ctx)(rangeBuilder)
+            //range.isNew = false
+
             ranges.put(id, range)
 
             if(range.ctx.num_elements != Await.result(range.length(), Duration.Inf)){

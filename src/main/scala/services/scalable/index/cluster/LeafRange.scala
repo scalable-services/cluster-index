@@ -272,6 +272,8 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
     getLeaf().map(_.get).map(_.copy()).map { thisLeaf =>
       val rightLeaf = thisLeaf.split()
 
+      rightLeaf.isNew = false
+
       ctx.root = Some(thisLeaf.unique_id)
       ctx.num_elements = thisLeaf.length
 
@@ -295,13 +297,17 @@ class LeafRange[K, V](val descriptor: IndexContext)(val builder: IndexBuilt[K, V
   }
 
   override def copy(sameId: Boolean = false): Future[Range[K, V]] = {
+    /*if(isNew) return Future.successful(this)
+
     val copy = new LeafRange[K, V](ctx.currentSnapshot())(builder)
 
     ctx.newBlocksReferences.foreach { case (bid, b) =>
       copy.ctx.newBlocksReferences.put(bid, b)
     }
 
-    Future.successful(copy)
+    Future.successful(copy)*/
+
+    Future.successful(this)
   }
 
   override def max(): Future[Option[(K, V, String)]] = {
